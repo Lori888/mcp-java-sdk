@@ -4,26 +4,10 @@
 
 package io.modelcontextprotocol.server.transport;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.modelcontextprotocol.spec.McpError;
-import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.*;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
-import io.modelcontextprotocol.spec.McpServerSession;
-import io.modelcontextprotocol.spec.McpServerTransport;
-import io.modelcontextprotocol.spec.McpServerTransportProvider;
 import io.modelcontextprotocol.util.Assert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +16,12 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 /**
  * Implementation of the MCP Stdio transport provider for servers that communicates using
@@ -93,7 +83,7 @@ public class StdioServerTransportProvider implements McpServerTransportProvider 
 	@Override
 	public void setSessionFactory(McpServerSession.Factory sessionFactory) {
 		// Create a single session for the stdio connection
-		var transport = new StdioMcpSessionTransport();
+		StdioMcpSessionTransport transport = new StdioMcpSessionTransport();
 		this.session = sessionFactory.create(transport);
 		transport.initProcessing();
 	}
@@ -304,7 +294,5 @@ public class StdioServerTransportProvider implements McpServerTransportProvider 
 				logger.error(message, e);
 			}
 		}
-
 	}
-
 }

@@ -3,6 +3,20 @@
  */
 package io.modelcontextprotocol.server.transport;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.spec.*;
+import io.modelcontextprotocol.util.Assert;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import javax.servlet.AsyncContext;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -10,25 +24,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.modelcontextprotocol.spec.McpError;
-import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.McpServerSession;
-import io.modelcontextprotocol.spec.McpServerTransport;
-import io.modelcontextprotocol.spec.McpServerTransportProvider;
-import io.modelcontextprotocol.util.Assert;
-import jakarta.servlet.AsyncContext;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 /**
  * A Servlet-based implementation of the MCP HTTP with Server-Sent Events (SSE) transport
@@ -184,12 +179,11 @@ public class HttpServletSseServerTransportProvider extends HttpServlet implement
 	 * sends the initial endpoint information to the client.
 	 * @param request The HTTP servlet request
 	 * @param response The HTTP servlet response
-	 * @throws ServletException If a servlet-specific error occurs
 	 * @throws IOException If an I/O error occurs
 	 */
 	@Override
 	protected void doGet(HttpServletRequest request, HttpServletResponse response)
-			throws ServletException, IOException {
+			throws IOException {
 
 		String requestURI = request.getRequestURI();
 		if (!requestURI.endsWith(sseEndpoint)) {
@@ -234,12 +228,11 @@ public class HttpServletSseServerTransportProvider extends HttpServlet implement
 	 * and formats error responses according to the MCP specification.
 	 * @param request The HTTP servlet request
 	 * @param response The HTTP servlet response
-	 * @throws ServletException If a servlet-specific error occurs
 	 * @throws IOException If an I/O error occurs
 	 */
 	@Override
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
-			throws ServletException, IOException {
+			throws IOException {
 
 		if (isClosing.get()) {
 			response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Server is shutting down");
@@ -537,7 +530,5 @@ public class HttpServletSseServerTransportProvider extends HttpServlet implement
 			}
 			return new HttpServletSseServerTransportProvider(objectMapper, baseUrl, messageEndpoint, sseEndpoint);
 		}
-
 	}
-
 }

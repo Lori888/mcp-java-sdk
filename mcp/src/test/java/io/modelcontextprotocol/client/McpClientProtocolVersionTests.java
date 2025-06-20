@@ -4,9 +4,6 @@
 
 package io.modelcontextprotocol.client;
 
-import java.time.Duration;
-import java.util.List;
-
 import io.modelcontextprotocol.MockMcpClientTransport;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -14,6 +11,9 @@ import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+
+import java.time.Duration;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,16 +39,16 @@ class McpClientProtocolVersionTests {
 
 			StepVerifier.create(initializeResultMono).then(() -> {
 				McpSchema.JSONRPCRequest request = transport.getLastSentMessageAsRequest();
-				assertThat(request.params()).isInstanceOf(McpSchema.InitializeRequest.class);
-				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.params();
-				assertThat(initRequest.protocolVersion()).isEqualTo(McpSchema.LATEST_PROTOCOL_VERSION);
+				assertThat(request.getParams()).isInstanceOf(McpSchema.InitializeRequest.class);
+				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.getParams();
+				assertThat(initRequest.getProtocolVersion()).isEqualTo(McpSchema.LATEST_PROTOCOL_VERSION);
 
-				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(),
+				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(),
 						new McpSchema.InitializeResult(McpSchema.LATEST_PROTOCOL_VERSION, null,
 								new McpSchema.Implementation("test-server", "1.0.0"), null),
 						null));
 			}).assertNext(result -> {
-				assertThat(result.protocolVersion()).isEqualTo(McpSchema.LATEST_PROTOCOL_VERSION);
+				assertThat(result.getProtocolVersion()).isEqualTo(McpSchema.LATEST_PROTOCOL_VERSION);
 			}).verifyComplete();
 
 		}
@@ -67,23 +67,23 @@ class McpClientProtocolVersionTests {
 			.requestTimeout(REQUEST_TIMEOUT)
 			.build();
 
-		client.setProtocolVersions(List.of(oldVersion, McpSchema.LATEST_PROTOCOL_VERSION));
+		client.setProtocolVersions(Arrays.asList(oldVersion, McpSchema.LATEST_PROTOCOL_VERSION));
 
 		try {
 			Mono<InitializeResult> initializeResultMono = client.initialize();
 
 			StepVerifier.create(initializeResultMono).then(() -> {
 				McpSchema.JSONRPCRequest request = transport.getLastSentMessageAsRequest();
-				assertThat(request.params()).isInstanceOf(McpSchema.InitializeRequest.class);
-				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.params();
-				assertThat(initRequest.protocolVersion()).isIn(List.of(oldVersion, McpSchema.LATEST_PROTOCOL_VERSION));
+				assertThat(request.getParams()).isInstanceOf(McpSchema.InitializeRequest.class);
+				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.getParams();
+				assertThat(initRequest.getProtocolVersion()).isIn(Arrays.asList(oldVersion, McpSchema.LATEST_PROTOCOL_VERSION));
 
-				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(),
+				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(),
 						new McpSchema.InitializeResult(oldVersion, null,
 								new McpSchema.Implementation("test-server", "1.0.0"), null),
 						null));
 			}).assertNext(result -> {
-				assertThat(result.protocolVersion()).isEqualTo(oldVersion);
+				assertThat(result.getProtocolVersion()).isEqualTo(oldVersion);
 			}).verifyComplete();
 		}
 		finally {
@@ -105,9 +105,9 @@ class McpClientProtocolVersionTests {
 
 			StepVerifier.create(initializeResultMono).then(() -> {
 				McpSchema.JSONRPCRequest request = transport.getLastSentMessageAsRequest();
-				assertThat(request.params()).isInstanceOf(McpSchema.InitializeRequest.class);
+				assertThat(request.getParams()).isInstanceOf(McpSchema.InitializeRequest.class);
 
-				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(),
+				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(),
 						new McpSchema.InitializeResult(unsupportedVersion, null,
 								new McpSchema.Implementation("test-server", "1.0.0"), null),
 						null));
@@ -130,22 +130,22 @@ class McpClientProtocolVersionTests {
 			.requestTimeout(REQUEST_TIMEOUT)
 			.build();
 
-		client.setProtocolVersions(List.of(oldVersion, middleVersion, latestVersion));
+		client.setProtocolVersions(Arrays.asList(oldVersion, middleVersion, latestVersion));
 
 		try {
 			Mono<InitializeResult> initializeResultMono = client.initialize();
 
 			StepVerifier.create(initializeResultMono).then(() -> {
 				McpSchema.JSONRPCRequest request = transport.getLastSentMessageAsRequest();
-				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.params();
-				assertThat(initRequest.protocolVersion()).isEqualTo(latestVersion);
+				McpSchema.InitializeRequest initRequest = (McpSchema.InitializeRequest) request.getParams();
+				assertThat(initRequest.getProtocolVersion()).isEqualTo(latestVersion);
 
-				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(),
+				transport.simulateIncomingMessage(new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(),
 						new McpSchema.InitializeResult(latestVersion, null,
 								new McpSchema.Implementation("test-server", "1.0.0"), null),
 						null));
 			}).assertNext(result -> {
-				assertThat(result.protocolVersion()).isEqualTo(latestVersion);
+				assertThat(result.getProtocolVersion()).isEqualTo(latestVersion);
 			}).verifyComplete();
 		}
 		finally {

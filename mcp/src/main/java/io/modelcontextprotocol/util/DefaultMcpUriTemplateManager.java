@@ -4,10 +4,7 @@
 
 package io.modelcontextprotocol.util;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,15 +38,13 @@ public class DefaultMcpUriTemplateManager implements McpUriTemplateManager {
 
 	/**
 	 * Extract URI variable names from a URI template.
-	 * @param uriTemplate The URI template containing variables in the format
-	 * {variableName}
 	 * @return A list of variable names extracted from the template
 	 * @throws IllegalArgumentException if duplicate variable names are found
 	 */
 	@Override
 	public List<String> getVariableNames() {
 		if (uriTemplate == null || uriTemplate.isEmpty()) {
-			return List.of();
+			return Collections.emptyList();
 		}
 
 		List<String> variables = new ArrayList<>();

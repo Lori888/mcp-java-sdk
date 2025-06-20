@@ -4,19 +4,16 @@
 
 package io.modelcontextprotocol;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.util.List;
-import java.util.Map;
-
 import io.modelcontextprotocol.util.DeafaultMcpUriTemplateManagerFactory;
 import io.modelcontextprotocol.util.McpUriTemplateManager;
 import io.modelcontextprotocol.util.McpUriTemplateManagerFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for {@link McpUriTemplateManager} and its implementations.
@@ -88,7 +85,7 @@ public class McpUriTemplateManagerTests {
 
 	@Test
 	void shouldMatchUriAgainstTemplatePattern() {
-		var uriTemplateManager = this.uriTemplateFactory.create("/api/users/{userId}/posts/{postId}");
+		McpUriTemplateManager uriTemplateManager = this.uriTemplateFactory.create("/api/users/{userId}/posts/{postId}");
 
 		assertTrue(uriTemplateManager.matches("/api/users/123/posts/456"));
 		assertFalse(uriTemplateManager.matches("/api/users/123/comments/456"));

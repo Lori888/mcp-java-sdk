@@ -247,7 +247,7 @@ public interface McpClient {
 		public SyncSpec roots(List<Root> roots) {
 			Assert.notNull(roots, "Roots must not be null");
 			for (Root root : roots) {
-				this.roots.put(root.uri(), root);
+				this.roots.put(root.getUri(), root);
 			}
 			return this;
 		}
@@ -263,7 +263,7 @@ public interface McpClient {
 		public SyncSpec roots(Root... roots) {
 			Assert.notNull(roots, "Roots must not be null");
 			for (Root root : roots) {
-				this.roots.put(root.uri(), root);
+				this.roots.put(root.getUri(), root);
 			}
 			return this;
 		}
@@ -486,7 +486,7 @@ public interface McpClient {
 		public AsyncSpec roots(List<Root> roots) {
 			Assert.notNull(roots, "Roots must not be null");
 			for (Root root : roots) {
-				this.roots.put(root.uri(), root);
+				this.roots.put(root.getUri(), root);
 			}
 			return this;
 		}
@@ -502,7 +502,7 @@ public interface McpClient {
 		public AsyncSpec roots(Root... roots) {
 			Assert.notNull(roots, "Roots must not be null");
 			for (Root root : roots) {
-				this.roots.put(root.uri(), root);
+				this.roots.put(root.getUri(), root);
 			}
 			return this;
 		}

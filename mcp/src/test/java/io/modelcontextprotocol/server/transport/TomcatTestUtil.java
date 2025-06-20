@@ -3,13 +3,14 @@
 */
 package io.modelcontextprotocol.server.transport;
 
+import org.apache.catalina.Context;
+import org.apache.catalina.connector.Connector;
+import org.apache.catalina.startup.Tomcat;
+
+import javax.servlet.Servlet;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
-
-import jakarta.servlet.Servlet;
-import org.apache.catalina.Context;
-import org.apache.catalina.startup.Tomcat;
 
 /**
  * @author Christian Tzolov
@@ -22,7 +23,7 @@ public class TomcatTestUtil {
 
 	public static Tomcat createTomcatServer(String contextPath, int port, Servlet servlet) {
 
-		var tomcat = new Tomcat();
+		Tomcat tomcat = new Tomcat();
 		tomcat.setPort(port);
 
 		String baseDir = System.getProperty("java.io.tmpdir");
@@ -39,7 +40,7 @@ public class TomcatTestUtil {
 		context.addChild(wrapper);
 		context.addServletMappingDecoded("/*", "mcpServlet");
 
-		var connector = tomcat.getConnector();
+		Connector connector = tomcat.getConnector();
 		connector.setAsyncTimeout(3000);
 
 		return tomcat;

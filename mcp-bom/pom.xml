@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.modelcontextprotocol.sdk</groupId>
         <artifactId>mcp-parent</artifactId>
-        <version>0.10.0</version>
+        <version>0.10.0-jdk8</version>
     </parent>
 
     <artifactId>mcp-bom</artifactId>
@@ -41,18 +41,18 @@
             </dependency>
 
             <!-- MCP Transport - WebFlux SSE -->
-            <dependency>
+            <!--<dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
                 <artifactId>mcp-spring-webflux</artifactId>
                 <version>${project.version}</version>
-            </dependency>
+            </dependency>-->
 
             <!-- MCP Transport - WebMVC SSE -->
-            <dependency>
+            <!--<dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
                 <artifactId>mcp-spring-webmvc</artifactId>
                 <version>${project.version}</version>
-            </dependency>
+            </dependency>-->
 
         </dependencies>
     </dependencyManagement>
@@ -94,5 +94,4 @@
             </plugin>
         </plugins>
     </build>
-
 </project>

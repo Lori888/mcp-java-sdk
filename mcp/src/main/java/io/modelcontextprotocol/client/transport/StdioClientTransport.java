@@ -4,17 +4,6 @@
 
 package io.modelcontextprotocol.client.transport;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -28,6 +17,20 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Implementation of the MCP Stdio transport that communicates with a server process using
@@ -305,7 +308,7 @@ public class StdioClientTransport implements McpClientTransport {
 						// embedded newlines.
 						jsonMessage = jsonMessage.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n");
 
-						var os = this.process.getOutputStream();
+						OutputStream os = this.process.getOutputStream();
 						synchronized (os) {
 							os.write(jsonMessage.getBytes(StandardCharsets.UTF_8));
 							os.write("\n".getBytes(StandardCharsets.UTF_8));
@@ -356,7 +359,7 @@ public class StdioClientTransport implements McpClientTransport {
 			logger.debug("Sending TERM to process");
 			if (this.process != null) {
 				this.process.destroy();
-				return Mono.fromFuture(process.onExit());
+				return Mono.fromFuture(CompletableFuture.supplyAsync(() -> waitForInternal(process)));
 			}
 			else {
 				logger.warn("Process not started");
@@ -380,6 +383,43 @@ public class StdioClientTransport implements McpClientTransport {
 				logger.error("Error during graceful shutdown", e);
 			}
 		})).then().subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	 * (copy from jdk17 java.lang.Process)
+	 * Wait for the process to exit by calling {@code waitFor}.
+	 * If the thread is interrupted, remember the interrupted state to
+	 * be restored before returning. Use ForkJoinPool.ManagedBlocker
+	 * so that the number of workers in case ForkJoinPool is used is
+	 * compensated when the thread blocks in waitFor().
+	 *
+	 * @return the Process
+	 */
+	private Process waitForInternal(Process process) {
+		boolean interrupted = false;
+		while (true) {
+			try {
+				ForkJoinPool.managedBlock(new ForkJoinPool.ManagedBlocker() {
+					@Override
+					public boolean block() throws InterruptedException {
+						process.waitFor();
+						return true;
+					}
+
+					@Override
+					public boolean isReleasable() {
+						return !process.isAlive();
+					}
+				});
+				break;
+			} catch (InterruptedException x) {
+				interrupted = true;
+			}
+		}
+		if (interrupted) {
+			Thread.currentThread().interrupt();
+		}
+		return process;
 	}
 
 	public Sinks.Many<String> getErrorSink() {

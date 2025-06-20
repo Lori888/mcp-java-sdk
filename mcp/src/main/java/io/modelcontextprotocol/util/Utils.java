@@ -9,6 +9,7 @@ import reactor.util.annotation.Nullable;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Miscellaneous utility methods.
@@ -30,7 +31,26 @@ public final class Utils {
 	 * @see Character#isWhitespace
 	 */
 	public static boolean hasText(@Nullable String str) {
-		return (str != null && !str.isBlank());
+		return (str != null && !isBlank(str));
+	}
+
+	/**
+	 * 等效JDK11+的isBlank()
+	 *
+	 * @param str
+	 * @return
+	 */
+	public static boolean isBlank(String str) {
+		if (str == null) {
+			return true;
+		}
+
+		for (char c : str.toCharArray()) {
+			if (!Character.isWhitespace(c)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -104,4 +124,22 @@ public final class Utils {
 		return endpointPath.startsWith(basePath);
 	}
 
+	/**
+	 * (copy from jdk17 java.util.Objects.requireNonNullElse)
+	 * Returns the first argument if it is non-{@code null} and
+	 * otherwise returns the non-{@code null} second argument.
+	 *
+	 * @param obj an object
+	 * @param defaultObj a non-{@code null} object to return if the first argument
+	 *                   is {@code null}
+	 * @param <T> the type of the reference
+	 * @return the first argument if it is non-{@code null} and
+	 *        otherwise the second argument if it is non-{@code null}
+	 * @throws NullPointerException if both {@code obj} is null and
+	 *        {@code defaultObj} is {@code null}
+	 * @since 9
+	 */
+	public static <T> T requireNonNullElse(T obj, T defaultObj) {
+		return (obj != null) ? obj : Objects.requireNonNull(defaultObj, "defaultObj");
+	}
 }

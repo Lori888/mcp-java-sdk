@@ -4,15 +4,6 @@
 
 package io.modelcontextprotocol.server;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -22,6 +13,12 @@ import io.modelcontextprotocol.util.Assert;
 import io.modelcontextprotocol.util.DeafaultMcpUriTemplateManagerFactory;
 import io.modelcontextprotocol.util.McpUriTemplateManagerFactory;
 import reactor.core.publisher.Mono;
+
+import java.time.Duration;
+import java.util.*;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.stream.Collectors;
 
 /**
  * Factory class for creating Model Context Protocol (MCP) servers. MCP servers expose
@@ -402,7 +399,7 @@ public interface McpServer {
 		public AsyncSpecification resources(List<McpServerFeatures.AsyncResourceSpecification> resourceSpecifications) {
 			Assert.notNull(resourceSpecifications, "Resource handlers list must not be null");
 			for (McpServerFeatures.AsyncResourceSpecification resource : resourceSpecifications) {
-				this.resources.put(resource.resource().uri(), resource);
+				this.resources.put(resource.getResource().getUri(), resource);
 			}
 			return this;
 		}
@@ -427,7 +424,7 @@ public interface McpServer {
 		public AsyncSpecification resources(McpServerFeatures.AsyncResourceSpecification... resourceSpecifications) {
 			Assert.notNull(resourceSpecifications, "Resource handlers list must not be null");
 			for (McpServerFeatures.AsyncResourceSpecification resource : resourceSpecifications) {
-				this.resources.put(resource.resource().uri(), resource);
+				this.resources.put(resource.getResource().getUri(), resource);
 			}
 			return this;
 		}
@@ -505,7 +502,7 @@ public interface McpServer {
 		public AsyncSpecification prompts(List<McpServerFeatures.AsyncPromptSpecification> prompts) {
 			Assert.notNull(prompts, "Prompts list must not be null");
 			for (McpServerFeatures.AsyncPromptSpecification prompt : prompts) {
-				this.prompts.put(prompt.prompt().name(), prompt);
+				this.prompts.put(prompt.getPrompt().getName(), prompt);
 			}
 			return this;
 		}
@@ -529,7 +526,7 @@ public interface McpServer {
 		public AsyncSpecification prompts(McpServerFeatures.AsyncPromptSpecification... prompts) {
 			Assert.notNull(prompts, "Prompts list must not be null");
 			for (McpServerFeatures.AsyncPromptSpecification prompt : prompts) {
-				this.prompts.put(prompt.prompt().name(), prompt);
+				this.prompts.put(prompt.getPrompt().getName(), prompt);
 			}
 			return this;
 		}
@@ -544,7 +541,7 @@ public interface McpServer {
 		public AsyncSpecification completions(List<McpServerFeatures.AsyncCompletionSpecification> completions) {
 			Assert.notNull(completions, "Completions list must not be null");
 			for (McpServerFeatures.AsyncCompletionSpecification completion : completions) {
-				this.completions.put(completion.referenceKey(), completion);
+				this.completions.put(completion.getReferenceKey(), completion);
 			}
 			return this;
 		}
@@ -559,7 +556,7 @@ public interface McpServer {
 		public AsyncSpecification completions(McpServerFeatures.AsyncCompletionSpecification... completions) {
 			Assert.notNull(completions, "Completions list must not be null");
 			for (McpServerFeatures.AsyncCompletionSpecification completion : completions) {
-				this.completions.put(completion.referenceKey(), completion);
+				this.completions.put(completion.getReferenceKey(), completion);
 			}
 			return this;
 		}
@@ -630,10 +627,10 @@ public interface McpServer {
 		 * settings.
 		 */
 		public McpAsyncServer build() {
-			var features = new McpServerFeatures.Async(this.serverInfo, this.serverCapabilities, this.tools,
+			McpServerFeatures.Async features = new McpServerFeatures.Async(this.serverInfo, this.serverCapabilities, this.tools,
 					this.resources, this.resourceTemplates, this.prompts, this.completions, this.rootsChangeHandlers,
 					this.instructions);
-			var mapper = this.objectMapper != null ? this.objectMapper : new ObjectMapper();
+			ObjectMapper mapper = this.objectMapper != null ? this.objectMapper : new ObjectMapper();
 			return new McpAsyncServer(this.transportProvider, mapper, features, this.requestTimeout,
 					this.uriTemplateManagerFactory);
 		}
@@ -893,7 +890,7 @@ public interface McpServer {
 		public SyncSpecification resources(List<McpServerFeatures.SyncResourceSpecification> resourceSpecifications) {
 			Assert.notNull(resourceSpecifications, "Resource handlers list must not be null");
 			for (McpServerFeatures.SyncResourceSpecification resource : resourceSpecifications) {
-				this.resources.put(resource.resource().uri(), resource);
+				this.resources.put(resource.getResource().getUri(), resource);
 			}
 			return this;
 		}
@@ -918,7 +915,7 @@ public interface McpServer {
 		public SyncSpecification resources(McpServerFeatures.SyncResourceSpecification... resourceSpecifications) {
 			Assert.notNull(resourceSpecifications, "Resource handlers list must not be null");
 			for (McpServerFeatures.SyncResourceSpecification resource : resourceSpecifications) {
-				this.resources.put(resource.resource().uri(), resource);
+				this.resources.put(resource.getResource().getUri(), resource);
 			}
 			return this;
 		}
@@ -997,7 +994,7 @@ public interface McpServer {
 		public SyncSpecification prompts(List<McpServerFeatures.SyncPromptSpecification> prompts) {
 			Assert.notNull(prompts, "Prompts list must not be null");
 			for (McpServerFeatures.SyncPromptSpecification prompt : prompts) {
-				this.prompts.put(prompt.prompt().name(), prompt);
+				this.prompts.put(prompt.getPrompt().getName(), prompt);
 			}
 			return this;
 		}
@@ -1021,7 +1018,7 @@ public interface McpServer {
 		public SyncSpecification prompts(McpServerFeatures.SyncPromptSpecification... prompts) {
 			Assert.notNull(prompts, "Prompts list must not be null");
 			for (McpServerFeatures.SyncPromptSpecification prompt : prompts) {
-				this.prompts.put(prompt.prompt().name(), prompt);
+				this.prompts.put(prompt.getPrompt().getName(), prompt);
 			}
 			return this;
 		}
@@ -1037,7 +1034,7 @@ public interface McpServer {
 		public SyncSpecification completions(List<McpServerFeatures.SyncCompletionSpecification> completions) {
 			Assert.notNull(completions, "Completions list must not be null");
 			for (McpServerFeatures.SyncCompletionSpecification completion : completions) {
-				this.completions.put(completion.referenceKey(), completion);
+				this.completions.put(completion.getReferenceKey(), completion);
 			}
 			return this;
 		}
@@ -1052,7 +1049,7 @@ public interface McpServer {
 		public SyncSpecification completions(McpServerFeatures.SyncCompletionSpecification... completions) {
 			Assert.notNull(completions, "Completions list must not be null");
 			for (McpServerFeatures.SyncCompletionSpecification completion : completions) {
-				this.completions.put(completion.referenceKey(), completion);
+				this.completions.put(completion.getReferenceKey(), completion);
 			}
 			return this;
 		}
@@ -1101,7 +1098,7 @@ public interface McpServer {
 		public SyncSpecification rootsChangeHandlers(
 				BiConsumer<McpSyncServerExchange, List<McpSchema.Root>>... handlers) {
 			Assert.notNull(handlers, "Handlers list must not be null");
-			return this.rootsChangeHandlers(List.of(handlers));
+			return this.rootsChangeHandlers(Arrays.stream(handlers).collect(Collectors.toList()));
 		}
 
 		/**
@@ -1126,8 +1123,8 @@ public interface McpServer {
 					this.tools, this.resources, this.resourceTemplates, this.prompts, this.completions,
 					this.rootsChangeHandlers, this.instructions);
 			McpServerFeatures.Async asyncFeatures = McpServerFeatures.Async.fromSync(syncFeatures);
-			var mapper = this.objectMapper != null ? this.objectMapper : new ObjectMapper();
-			var asyncServer = new McpAsyncServer(this.transportProvider, mapper, asyncFeatures, this.requestTimeout,
+			ObjectMapper mapper = this.objectMapper != null ? this.objectMapper : new ObjectMapper();
+			McpAsyncServer asyncServer = new McpAsyncServer(this.transportProvider, mapper, asyncFeatures, this.requestTimeout,
 					this.uriTemplateManagerFactory);
 
 			return new McpSyncServer(asyncServer);

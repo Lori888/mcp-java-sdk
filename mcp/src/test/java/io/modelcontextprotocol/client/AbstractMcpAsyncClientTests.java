@@ -4,28 +4,10 @@
 
 package io.modelcontextprotocol.client;
 
-import java.time.Duration;
-import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
-import io.modelcontextprotocol.spec.McpSchema.ClientCapabilities;
-import io.modelcontextprotocol.spec.McpSchema.CreateMessageRequest;
-import io.modelcontextprotocol.spec.McpSchema.CreateMessageResult;
-import io.modelcontextprotocol.spec.McpSchema.GetPromptRequest;
-import io.modelcontextprotocol.spec.McpSchema.Prompt;
-import io.modelcontextprotocol.spec.McpSchema.Resource;
-import io.modelcontextprotocol.spec.McpSchema.Root;
-import io.modelcontextprotocol.spec.McpSchema.SubscribeRequest;
-import io.modelcontextprotocol.spec.McpSchema.Tool;
-import io.modelcontextprotocol.spec.McpSchema.UnsubscribeRequest;
+import io.modelcontextprotocol.spec.McpSchema.*;
 import io.modelcontextprotocol.spec.McpTransport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +17,15 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * Test suite for the {@link McpAsyncClient} that can be used with different
@@ -92,7 +80,7 @@ public abstract class AbstractMcpAsyncClientTests {
 
 	void withClient(McpClientTransport transport, Function<McpClient.AsyncSpec, McpClient.AsyncSpec> customizer,
 			Consumer<McpAsyncClient> c) {
-		var client = client(transport, customizer);
+		McpAsyncClient client = client(transport, customizer);
 		try {
 			c.accept(client);
 		}
@@ -142,11 +130,11 @@ public abstract class AbstractMcpAsyncClientTests {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.listTools(null)))
 				.consumeNextWith(result -> {
-					assertThat(result.tools()).isNotNull().isNotEmpty();
+					assertThat(result.getTools()).isNotNull().isNotEmpty();
 
-					Tool firstTool = result.tools().get(0);
-					assertThat(firstTool.name()).isNotNull();
-					assertThat(firstTool.description()).isNotNull();
+					Tool firstTool = result.getTools().get(0);
+					assertThat(firstTool.getName()).isNotNull();
+					assertThat(firstTool.getDescription()).isNotNull();
 				})
 				.verifyComplete();
 		});
@@ -168,20 +156,20 @@ public abstract class AbstractMcpAsyncClientTests {
 
 	@Test
 	void testCallToolWithoutInitialization() {
-		CallToolRequest callToolRequest = new CallToolRequest("echo", Map.of("message", ECHO_TEST_MESSAGE));
+		CallToolRequest callToolRequest = new CallToolRequest("echo", Collections.singletonMap("message", ECHO_TEST_MESSAGE));
 		verifyInitializationTimeout(client -> client.callTool(callToolRequest), "calling tools");
 	}
 
 	@Test
 	void testCallTool() {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
-			CallToolRequest callToolRequest = new CallToolRequest("echo", Map.of("message", ECHO_TEST_MESSAGE));
+			CallToolRequest callToolRequest = new CallToolRequest("echo", Collections.singletonMap("message", ECHO_TEST_MESSAGE));
 
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.callTool(callToolRequest)))
 				.consumeNextWith(callToolResult -> {
 					assertThat(callToolResult).isNotNull().satisfies(result -> {
-						assertThat(result.content()).isNotNull();
-						assertThat(result.isError()).isNull();
+						assertThat(result.getContent()).isNotNull();
+						assertThat(result.getIsError()).isNull();
 					});
 				})
 				.verifyComplete();
@@ -192,7 +180,7 @@ public abstract class AbstractMcpAsyncClientTests {
 	void testCallToolWithInvalidTool() {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
 			CallToolRequest invalidRequest = new CallToolRequest("nonexistent_tool",
-					Map.of("message", ECHO_TEST_MESSAGE));
+					Collections.singletonMap("message", ECHO_TEST_MESSAGE));
 
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.callTool(invalidRequest)))
 				.consumeErrorWith(
@@ -212,12 +200,12 @@ public abstract class AbstractMcpAsyncClientTests {
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.listResources(null)))
 				.consumeNextWith(resources -> {
 					assertThat(resources).isNotNull().satisfies(result -> {
-						assertThat(result.resources()).isNotNull();
+						assertThat(result.getResources()).isNotNull();
 
-						if (!result.resources().isEmpty()) {
-							Resource firstResource = result.resources().get(0);
-							assertThat(firstResource.uri()).isNotNull();
-							assertThat(firstResource.name()).isNotNull();
+						if (!result.getResources().isEmpty()) {
+							Resource firstResource = result.getResources().get(0);
+							assertThat(firstResource.getUri()).isNotNull();
+							assertThat(firstResource.getName()).isNotNull();
 						}
 					});
 				})
@@ -243,12 +231,12 @@ public abstract class AbstractMcpAsyncClientTests {
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.listPrompts(null)))
 				.consumeNextWith(prompts -> {
 					assertThat(prompts).isNotNull().satisfies(result -> {
-						assertThat(result.prompts()).isNotNull();
+						assertThat(result.getPrompts()).isNotNull();
 
-						if (!result.prompts().isEmpty()) {
-							Prompt firstPrompt = result.prompts().get(0);
-							assertThat(firstPrompt.name()).isNotNull();
-							assertThat(firstPrompt.description()).isNotNull();
+						if (!result.getPrompts().isEmpty()) {
+							Prompt firstPrompt = result.getPrompts().get(0);
+							assertThat(firstPrompt.getName()).isNotNull();
+							assertThat(firstPrompt.getDescription()).isNotNull();
 						}
 					});
 				})
@@ -258,7 +246,7 @@ public abstract class AbstractMcpAsyncClientTests {
 
 	@Test
 	void testGetPromptWithoutInitialization() {
-		GetPromptRequest request = new GetPromptRequest("simple_prompt", Map.of());
+		GetPromptRequest request = new GetPromptRequest("simple_prompt", Collections.emptyMap());
 		verifyInitializationTimeout(client -> client.getPrompt(request), "getting " + "prompts");
 	}
 
@@ -267,11 +255,11 @@ public abstract class AbstractMcpAsyncClientTests {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
 			StepVerifier
 				.create(mcpAsyncClient.initialize()
-					.then(mcpAsyncClient.getPrompt(new GetPromptRequest("simple_prompt", Map.of()))))
+					.then(mcpAsyncClient.getPrompt(new GetPromptRequest("simple_prompt", Collections.emptyMap()))))
 				.consumeNextWith(prompt -> {
 					assertThat(prompt).isNotNull().satisfies(result -> {
-						assertThat(result.messages()).isNotEmpty();
-						assertThat(result.messages()).hasSize(1);
+						assertThat(result.getMessages()).isNotEmpty();
+						assertThat(result.getMessages()).hasSize(1);
 					});
 				})
 				.verifyComplete();
@@ -323,7 +311,7 @@ public abstract class AbstractMcpAsyncClientTests {
 			Root root = new Root("file:///test/path/to/remove", "root-to-remove");
 			StepVerifier.create(mcpAsyncClient.addRoot(root)).verifyComplete();
 
-			StepVerifier.create(mcpAsyncClient.removeRoot(root.uri())).verifyComplete();
+			StepVerifier.create(mcpAsyncClient.removeRoot(root.getUri())).verifyComplete();
 		});
 	}
 
@@ -342,11 +330,11 @@ public abstract class AbstractMcpAsyncClientTests {
 	void testReadResource() {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
 			StepVerifier.create(mcpAsyncClient.listResources()).consumeNextWith(resources -> {
-				if (!resources.resources().isEmpty()) {
-					Resource firstResource = resources.resources().get(0);
+				if (!resources.getResources().isEmpty()) {
+					Resource firstResource = resources.getResources().get(0);
 					StepVerifier.create(mcpAsyncClient.readResource(firstResource)).consumeNextWith(result -> {
 						assertThat(result).isNotNull();
-						assertThat(result.contents()).isNotNull();
+						assertThat(result.getContents()).isNotNull();
 					}).verifyComplete();
 				}
 			}).verifyComplete();
@@ -364,7 +352,7 @@ public abstract class AbstractMcpAsyncClientTests {
 			StepVerifier.create(mcpAsyncClient.initialize().then(mcpAsyncClient.listResourceTemplates()))
 				.consumeNextWith(result -> {
 					assertThat(result).isNotNull();
-					assertThat(result.resourceTemplates()).isNotNull();
+					assertThat(result.getResourceTemplates()).isNotNull();
 				})
 				.verifyComplete();
 		});
@@ -374,15 +362,15 @@ public abstract class AbstractMcpAsyncClientTests {
 	void testResourceSubscription() {
 		withClient(createMcpTransport(), mcpAsyncClient -> {
 			StepVerifier.create(mcpAsyncClient.listResources()).consumeNextWith(resources -> {
-				if (!resources.resources().isEmpty()) {
-					Resource firstResource = resources.resources().get(0);
+				if (!resources.getResources().isEmpty()) {
+					Resource firstResource = resources.getResources().get(0);
 
 					// Test subscribe
-					StepVerifier.create(mcpAsyncClient.subscribeResource(new SubscribeRequest(firstResource.uri())))
+					StepVerifier.create(mcpAsyncClient.subscribeResource(new SubscribeRequest(firstResource.getUri())))
 						.verifyComplete();
 
 					// Test unsubscribe
-					StepVerifier.create(mcpAsyncClient.unsubscribeResource(new UnsubscribeRequest(firstResource.uri())))
+					StepVerifier.create(mcpAsyncClient.unsubscribeResource(new UnsubscribeRequest(firstResource.getUri())))
 						.verifyComplete();
 				}
 			}).verifyComplete();
@@ -424,8 +412,8 @@ public abstract class AbstractMcpAsyncClientTests {
 
 	@Test
 	void testInitializeWithAllCapabilities() {
-		var capabilities = ClientCapabilities.builder()
-			.experimental(Map.of("feature", "test"))
+		ClientCapabilities capabilities = ClientCapabilities.builder()
+			.experimental(Collections.singletonMap("feature", "test"))
 			.roots(true)
 			.sampling()
 			.build();
@@ -438,7 +426,7 @@ public abstract class AbstractMcpAsyncClientTests {
 
 				StepVerifier.create(client.initialize()).assertNext(result -> {
 					assertThat(result).isNotNull();
-					assertThat(result.capabilities()).isNotNull();
+					assertThat(result.getCapabilities()).isNotNull();
 				}).verifyComplete());
 	}
 

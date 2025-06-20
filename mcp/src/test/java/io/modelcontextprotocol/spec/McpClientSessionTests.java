@@ -4,9 +4,6 @@
 
 package io.modelcontextprotocol.spec;
 
-import java.time.Duration;
-import java.util.Map;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.modelcontextprotocol.MockMcpClientTransport;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +14,10 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,8 +47,8 @@ class McpClientSessionTests {
 	@BeforeEach
 	void setUp() {
 		transport = new MockMcpClientTransport();
-		session = new McpClientSession(TIMEOUT, transport, Map.of(),
-				Map.of(TEST_NOTIFICATION, params -> Mono.fromRunnable(() -> logger.info("Status update: " + params))));
+		session = new McpClientSession(TIMEOUT, transport, Collections.emptyMap(),
+				Collections.singletonMap(TEST_NOTIFICATION, params -> Mono.fromRunnable(() -> logger.info("Status update: " + params))));
 	}
 
 	@AfterEach
@@ -59,16 +60,16 @@ class McpClientSessionTests {
 
 	@Test
 	void testConstructorWithInvalidArguments() {
-		assertThatThrownBy(() -> new McpClientSession(null, transport, Map.of(), Map.of()))
+		assertThatThrownBy(() -> new McpClientSession(null, transport, Collections.emptyMap(), Collections.emptyMap()))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("The requestTimeout can not be null");
 
-		assertThatThrownBy(() -> new McpClientSession(TIMEOUT, null, Map.of(), Map.of()))
+		assertThatThrownBy(() -> new McpClientSession(TIMEOUT, null, Collections.emptyMap(), Collections.emptyMap()))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("transport can not be null");
 	}
 
-	TypeReference<String> responseType = new TypeReference<>() {
+	TypeReference<String> responseType = new TypeReference<String>() {
 	};
 
 	@Test
@@ -82,14 +83,14 @@ class McpClientSessionTests {
 		StepVerifier.create(responseMono).then(() -> {
 			McpSchema.JSONRPCRequest request = transport.getLastSentMessageAsRequest();
 			transport.simulateIncomingMessage(
-					new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(), responseData, null));
+					new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(), responseData, null));
 		}).consumeNextWith(response -> {
 			// Verify the request was sent
 			McpSchema.JSONRPCMessage sentMessage = transport.getLastSentMessageAsRequest();
 			assertThat(sentMessage).isInstanceOf(McpSchema.JSONRPCRequest.class);
 			McpSchema.JSONRPCRequest request = (McpSchema.JSONRPCRequest) sentMessage;
-			assertThat(request.method()).isEqualTo(TEST_METHOD);
-			assertThat(request.params()).isEqualTo(testParam);
+			assertThat(request.getMethod()).isEqualTo(TEST_METHOD);
+			assertThat(request.getParams()).isEqualTo(testParam);
 			assertThat(response).isEqualTo(responseData);
 		}).verifyComplete();
 	}
@@ -105,7 +106,7 @@ class McpClientSessionTests {
 			McpSchema.JSONRPCResponse.JSONRPCError error = new McpSchema.JSONRPCResponse.JSONRPCError(
 					McpSchema.ErrorCodes.METHOD_NOT_FOUND, "Method not found", null);
 			transport.simulateIncomingMessage(
-					new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.id(), null, error));
+					new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, request.getId(), null, error));
 		}).expectError(McpError.class).verify();
 	}
 
@@ -121,7 +122,7 @@ class McpClientSessionTests {
 
 	@Test
 	void testSendNotification() {
-		Map<String, Object> params = Map.of("key", "value");
+		Map<String, Object> params = Collections.singletonMap("key", "value");
 		Mono<Void> notificationMono = session.sendNotification(TEST_NOTIFICATION, params);
 
 		// Verify notification was sent
@@ -129,18 +130,18 @@ class McpClientSessionTests {
 			McpSchema.JSONRPCMessage sentMessage = transport.getLastSentMessage();
 			assertThat(sentMessage).isInstanceOf(McpSchema.JSONRPCNotification.class);
 			McpSchema.JSONRPCNotification notification = (McpSchema.JSONRPCNotification) sentMessage;
-			assertThat(notification.method()).isEqualTo(TEST_NOTIFICATION);
-			assertThat(notification.params()).isEqualTo(params);
+			assertThat(notification.getMethod()).isEqualTo(TEST_NOTIFICATION);
+			assertThat(notification.getParams()).isEqualTo(params);
 		}).verifyComplete();
 	}
 
 	@Test
 	void testRequestHandling() {
 		String echoMessage = "Hello MCP!";
-		Map<String, McpClientSession.RequestHandler<?>> requestHandlers = Map.of(ECHO_METHOD,
+		Map<String, McpClientSession.RequestHandler<?>> requestHandlers = Collections.singletonMap(ECHO_METHOD,
 				params -> Mono.just(params));
 		transport = new MockMcpClientTransport();
-		session = new McpClientSession(TIMEOUT, transport, requestHandlers, Map.of());
+		session = new McpClientSession(TIMEOUT, transport, requestHandlers, Collections.emptyMap());
 
 		// Simulate incoming request
 		McpSchema.JSONRPCRequest request = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION, ECHO_METHOD,
@@ -151,8 +152,8 @@ class McpClientSessionTests {
 		McpSchema.JSONRPCMessage sentMessage = transport.getLastSentMessage();
 		assertThat(sentMessage).isInstanceOf(McpSchema.JSONRPCResponse.class);
 		McpSchema.JSONRPCResponse response = (McpSchema.JSONRPCResponse) sentMessage;
-		assertThat(response.result()).isEqualTo(echoMessage);
-		assertThat(response.error()).isNull();
+		assertThat(response.getResult()).isEqualTo(echoMessage);
+		assertThat(response.getError()).isNull();
 	}
 
 	@Test
@@ -160,11 +161,11 @@ class McpClientSessionTests {
 		Sinks.One<Object> receivedParams = Sinks.one();
 
 		transport = new MockMcpClientTransport();
-		session = new McpClientSession(TIMEOUT, transport, Map.of(),
-				Map.of(TEST_NOTIFICATION, params -> Mono.fromRunnable(() -> receivedParams.tryEmitValue(params))));
+		session = new McpClientSession(TIMEOUT, transport, Collections.emptyMap(),
+				Collections.singletonMap(TEST_NOTIFICATION, params -> Mono.fromRunnable(() -> receivedParams.tryEmitValue(params))));
 
 		// Simulate incoming notification from the server
-		Map<String, Object> notificationParams = Map.of("status", "ready");
+		Map<String, Object> notificationParams = Collections.singletonMap("status", "ready");
 
 		McpSchema.JSONRPCNotification notification = new McpSchema.JSONRPCNotification(McpSchema.JSONRPC_VERSION,
 				TEST_NOTIFICATION, notificationParams);
@@ -186,8 +187,8 @@ class McpClientSessionTests {
 		McpSchema.JSONRPCMessage sentMessage = transport.getLastSentMessage();
 		assertThat(sentMessage).isInstanceOf(McpSchema.JSONRPCResponse.class);
 		McpSchema.JSONRPCResponse response = (McpSchema.JSONRPCResponse) sentMessage;
-		assertThat(response.error()).isNotNull();
-		assertThat(response.error().code()).isEqualTo(McpSchema.ErrorCodes.METHOD_NOT_FOUND);
+		assertThat(response.getError()).isNotNull();
+		assertThat(response.getError().getCode()).isEqualTo(McpSchema.ErrorCodes.METHOD_NOT_FOUND);
 	}
 
 	@Test

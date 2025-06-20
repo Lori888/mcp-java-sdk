@@ -30,10 +30,12 @@ public class McpAsyncServerExchange {
 
 	private volatile LoggingLevel minLoggingLevel = LoggingLevel.INFO;
 
-	private static final TypeReference<McpSchema.CreateMessageResult> CREATE_MESSAGE_RESULT_TYPE_REF = new TypeReference<>() {
+	private static final TypeReference<McpSchema.CreateMessageResult> CREATE_MESSAGE_RESULT_TYPE_REF =
+			new TypeReference<McpSchema.CreateMessageResult>() {
 	};
 
-	private static final TypeReference<McpSchema.ListRootsResult> LIST_ROOTS_RESULT_TYPE_REF = new TypeReference<>() {
+	private static final TypeReference<McpSchema.ListRootsResult> LIST_ROOTS_RESULT_TYPE_REF =
+			new TypeReference<McpSchema.ListRootsResult>() {
 	};
 
 	/**
@@ -86,7 +88,7 @@ public class McpAsyncServerExchange {
 		if (this.clientCapabilities == null) {
 			return Mono.error(new McpError("Client must be initialized. Call the initialize method first!"));
 		}
-		if (this.clientCapabilities.sampling() == null) {
+		if (this.clientCapabilities.getSampling() == null) {
 			return Mono.error(new McpError("Client must be configured with sampling capabilities"));
 		}
 		return this.session.sendRequest(McpSchema.METHOD_SAMPLING_CREATE_MESSAGE, createMessageRequest,
@@ -124,7 +126,7 @@ public class McpAsyncServerExchange {
 		}
 
 		return Mono.defer(() -> {
-			if (this.isNotificationForLevelAllowed(loggingMessageNotification.level())) {
+			if (this.isNotificationForLevelAllowed(loggingMessageNotification.getLevel())) {
 				return this.session.sendNotification(McpSchema.METHOD_NOTIFICATION_MESSAGE, loggingMessageNotification);
 			}
 			return Mono.empty();

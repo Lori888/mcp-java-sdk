@@ -4,16 +4,6 @@
 
 package io.modelcontextprotocol.server.transport;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -26,11 +16,20 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Tests for {@link StdioServerTransportProvider}.
@@ -100,8 +99,7 @@ class StdioServerTransportProviderTests {
 	}
 
 	@Test
-	void shouldHandleIncomingMessages() throws Exception {
-
+	void shouldHandleIncomingMessages() {
 		String jsonMessage = "{\"jsonrpc\":\"2.0\",\"method\":\"test\",\"params\":{},\"id\":1}\n";
 		InputStream stream = new ByteArrayInputStream(jsonMessage.getBytes(StandardCharsets.UTF_8));
 
@@ -134,8 +132,8 @@ class StdioServerTransportProviderTests {
 			assertThat(message).isNotNull();
 			assertThat(message).isInstanceOf(McpSchema.JSONRPCRequest.class);
 			McpSchema.JSONRPCRequest request = (McpSchema.JSONRPCRequest) message;
-			assertThat(request.method()).isEqualTo("test");
-			assertThat(request.id()).isEqualTo(1);
+			assertThat(request.getMethod()).isEqualTo("test");
+			assertThat(request.getId()).isEqualTo(1);
 		}).verifyComplete();
 	}
 
@@ -146,7 +144,7 @@ class StdioServerTransportProviderTests {
 
 		// Send notification
 		String method = "testNotification";
-		Map<String, Object> params = Map.of("key", "value");
+		Map<String, Object> params = Collections.singletonMap("key", "value");
 
 		StepVerifier.create(transportProvider.notifyClients(method, params)).verifyComplete();
 
@@ -187,7 +185,7 @@ class StdioServerTransportProviderTests {
 
 		transportProvider = new StdioServerTransportProvider(objectMapper);
 		// Send notification before setting session factory
-		StepVerifier.create(transportProvider.notifyClients("testNotification", Map.of("key", "value")))
+		StepVerifier.create(transportProvider.notifyClients("testNotification", Collections.singletonMap("key", "value")))
 			.verifyErrorSatisfies(error -> {
 				assertThat(error).isInstanceOf(McpError.class);
 			});

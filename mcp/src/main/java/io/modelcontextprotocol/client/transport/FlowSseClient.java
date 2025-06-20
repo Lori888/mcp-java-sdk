@@ -3,14 +3,13 @@
 */
 package io.modelcontextprotocol.client.transport;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Flow;
+import lombok.Value;
+import okhttp3.*;
+import okio.BufferedSource;
+
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -37,9 +36,9 @@ import java.util.regex.Pattern;
  */
 public class FlowSseClient {
 
-	private final HttpClient httpClient;
+	private final OkHttpClient httpClient;
 
-	private final HttpRequest.Builder requestBuilder;
+	private final Request.Builder requestBuilder;
 
 	/**
 	 * Pattern to extract the data content from SSE data field lines. Matches lines
@@ -61,12 +60,17 @@ public class FlowSseClient {
 
 	/**
 	 * Record class representing a Server-Sent Event with its standard fields.
-	 *
-	 * @param id the event ID (may be null)
-	 * @param type the event type (defaults to "message" if not specified in the stream)
-	 * @param data the event payload data
 	 */
-	public static record SseEvent(String id, String type, String data) {
+	@Value
+	public static class SseEvent {
+		/** the event ID (may be null) */
+		String id;
+
+		/** the event type (defaults to "message" if not specified in the stream) */
+		String type;
+
+		/** the event payload data */
+		String data;
 	}
 
 	/**
@@ -87,22 +91,28 @@ public class FlowSseClient {
 		 */
 		void onError(Throwable error);
 
+		/**
+		 * Called when the SSE connection is completed.
+		 */
+		default void onComplete() {
+			// Default empty implementation
+		}
 	}
 
 	/**
 	 * Creates a new FlowSseClient with the specified HTTP client.
-	 * @param httpClient the {@link HttpClient} instance to use for SSE connections
+	 * @param httpClient the {@link OkHttpClient} instance to use for SSE connections
 	 */
-	public FlowSseClient(HttpClient httpClient) {
-		this(httpClient, HttpRequest.newBuilder());
+	public FlowSseClient(OkHttpClient httpClient) {
+		this(httpClient, new Request.Builder());
 	}
 
 	/**
 	 * Creates a new FlowSseClient with the specified HTTP client and request builder.
-	 * @param httpClient the {@link HttpClient} instance to use for SSE connections
-	 * @param requestBuilder the {@link HttpRequest.Builder} to use for SSE requests
+	 * @param httpClient the {@link OkHttpClient} instance to use for SSE connections
+	 * @param requestBuilder the {@link new Request.Builder()} to use for SSE requests
 	 */
-	public FlowSseClient(HttpClient httpClient, HttpRequest.Builder requestBuilder) {
+	public FlowSseClient(OkHttpClient httpClient, Request.Builder requestBuilder) {
 		this.httpClient = httpClient;
 		this.requestBuilder = requestBuilder;
 	}
@@ -121,90 +131,142 @@ public class FlowSseClient {
 	 * @throws RuntimeException if the connection fails with a non-200 status code
 	 */
 	public void subscribe(String url, SseEventHandler eventHandler) {
-		HttpRequest request = this.requestBuilder.uri(URI.create(url))
-			.header("Accept", "text/event-stream")
-			.header("Cache-Control", "no-cache")
-			.GET()
-			.build();
+		Request request = requestBuilder.url(url)
+				.header("Accept", "text/event-stream")
+				.header("Cache-Control", "no-cache")
+				.get()
+				.build();
 
+		Call call = httpClient.newCall(request);
+		call.enqueue(new Callback() {
+			@Override
+			public void onFailure(Call call, IOException e) {
+				eventHandler.onError(e);
+			}
+
+			@Override
+			public void onResponse(Call call, Response response) throws IOException {
+				if (!response.isSuccessful()) {
+					eventHandler.onError(new RuntimeException("Failed to connect to SSE stream. Status code: " + response.code()));
+					return;
+				}
+
+				try (ResponseBody body = response.body()) {
+					if (body == null) {
+						eventHandler.onError(new RuntimeException("Response body is null"));
+						return;
+					}
+
+					processEventStream(body.source(), eventHandler);
+				} catch (Exception e) {
+					eventHandler.onError(e);
+				}
+			}
+		});
+	}
+
+	/**
+	 * Processes the SSE event stream from the buffered source.
+	 * @param source the buffered source containing the SSE stream
+	 * @param eventHandler the event handler to deliver events to
+	 * @throws IOException if an I/O error occurs while reading the stream
+	 */
+	private void processEventStream(BufferedSource source, SseEventHandler eventHandler) throws IOException {
 		StringBuilder eventBuilder = new StringBuilder();
 		AtomicReference<String> currentEventId = new AtomicReference<>();
 		AtomicReference<String> currentEventType = new AtomicReference<>("message");
 
-		Flow.Subscriber<String> lineSubscriber = new Flow.Subscriber<>() {
-			private Flow.Subscription subscription;
-
-			@Override
-			public void onSubscribe(Flow.Subscription subscription) {
-				this.subscription = subscription;
-				subscription.request(Long.MAX_VALUE);
-			}
-
-			@Override
-			public void onNext(String line) {
+		try {
+			String line;
+			while ((line = source.readUtf8Line()) != null) {
 				if (line.isEmpty()) {
 					// Empty line means end of event
 					if (eventBuilder.length() > 0) {
 						String eventData = eventBuilder.toString();
-						SseEvent event = new SseEvent(currentEventId.get(), currentEventType.get(), eventData.trim());
+						SseEvent event = new SseEvent(
+								currentEventId.get(),
+								currentEventType.get(),
+								eventData.trim()
+						);
 						eventHandler.onEvent(event);
 						eventBuilder.setLength(0);
 					}
-				}
-				else {
-					if (line.startsWith("data:")) {
-						var matcher = EVENT_DATA_PATTERN.matcher(line);
-						if (matcher.find()) {
-							eventBuilder.append(matcher.group(1).trim()).append("\n");
-						}
-					}
-					else if (line.startsWith("id:")) {
-						var matcher = EVENT_ID_PATTERN.matcher(line);
-						if (matcher.find()) {
-							currentEventId.set(matcher.group(1).trim());
-						}
-					}
-					else if (line.startsWith("event:")) {
-						var matcher = EVENT_TYPE_PATTERN.matcher(line);
-						if (matcher.find()) {
-							currentEventType.set(matcher.group(1).trim());
-						}
-					}
-				}
-				subscription.request(1);
-			}
-
-			@Override
-			public void onError(Throwable throwable) {
-				eventHandler.onError(throwable);
-			}
-
-			@Override
-			public void onComplete() {
-				// Handle any remaining event data
-				if (eventBuilder.length() > 0) {
-					String eventData = eventBuilder.toString();
-					SseEvent event = new SseEvent(currentEventId.get(), currentEventType.get(), eventData.trim());
-					eventHandler.onEvent(event);
+				} else {
+					processEventLine(line, eventBuilder, currentEventId, currentEventType);
 				}
 			}
-		};
 
-		Function<Flow.Subscriber<String>, HttpResponse.BodySubscriber<Void>> subscriberFactory = subscriber -> HttpResponse.BodySubscribers
-			.fromLineSubscriber(subscriber);
-
-		CompletableFuture<HttpResponse<Void>> future = this.httpClient.sendAsync(request,
-				info -> subscriberFactory.apply(lineSubscriber));
-
-		future.thenAccept(response -> {
-			int status = response.statusCode();
-			if (status != 200 && status != 201 && status != 202 && status != 206) {
-				throw new RuntimeException("Failed to connect to SSE stream. Unexpected status code: " + status);
+			// Handle any remaining event data
+			if (eventBuilder.length() > 0) {
+				String eventData = eventBuilder.toString();
+				SseEvent event = new SseEvent(
+						currentEventId.get(),
+						currentEventType.get(),
+						eventData.trim()
+				);
+				eventHandler.onEvent(event);
 			}
-		}).exceptionally(throwable -> {
-			eventHandler.onError(throwable);
-			return null;
-		});
+
+			eventHandler.onComplete();
+		} catch (IOException e) {
+			eventHandler.onError(e);
+		}
 	}
 
+	/**
+	 * Processes a single line from the SSE stream.
+	 * @param line the line to process
+	 * @param eventBuilder the string builder for accumulating event data
+	 * @param currentEventId reference to the current event ID
+	 * @param currentEventType reference to the current event type
+	 */
+	private void processEventLine(String line, StringBuilder eventBuilder,
+								  AtomicReference<String> currentEventId,
+								  AtomicReference<String> currentEventType) {
+		if (line.startsWith("data:")) {
+			Matcher matcher = EVENT_DATA_PATTERN.matcher(line);
+			if (matcher.find()) {
+				eventBuilder.append(matcher.group(1).trim()).append("\n");
+			}
+		} else if (line.startsWith("id:")) {
+			Matcher matcher = EVENT_ID_PATTERN.matcher(line);
+			if (matcher.find()) {
+				currentEventId.set(matcher.group(1).trim());
+			}
+		} else if (line.startsWith("event:")) {
+			Matcher matcher = EVENT_TYPE_PATTERN.matcher(line);
+			if (matcher.find()) {
+				currentEventType.set(matcher.group(1).trim());
+			}
+		}
+		// Ignore other types of lines (like comments starting with :)
+	}
+
+	/**
+	 * Synchronous version of subscribe method for cases where blocking behavior is desired.
+	 * @param url the SSE endpoint URL to connect to
+	 * @param eventHandler the handler that will receive SSE events and error notifications
+	 * @throws IOException if an I/O error occurs during the connection
+	 */
+	public void subscribeSync(String url, SseEventHandler eventHandler) throws IOException {
+		Request request = requestBuilder
+				.url(url)
+				.header("Accept", "text/event-stream")
+				.header("Cache-Control", "no-cache")
+				.get()
+				.build();
+
+		try (Response response = httpClient.newCall(request).execute()) {
+			if (!response.isSuccessful()) {
+				throw new RuntimeException("Failed to connect to SSE stream. Status code: " + response.code());
+			}
+
+			ResponseBody body = response.body();
+			if (body == null) {
+				throw new RuntimeException("Response body is null");
+			}
+
+			processEventStream(body.source(), eventHandler);
+		}
+	}
 }

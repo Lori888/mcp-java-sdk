@@ -3,33 +3,20 @@
  */
 package io.modelcontextprotocol.server.transport;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
+import io.modelcontextprotocol.server.McpAsyncServer;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
-import io.modelcontextprotocol.spec.McpSchema.ClientCapabilities;
-import io.modelcontextprotocol.spec.McpSchema.CreateMessageRequest;
-import io.modelcontextprotocol.spec.McpSchema.CreateMessageResult;
-import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
-import io.modelcontextprotocol.spec.McpSchema.ModelPreferences;
-import io.modelcontextprotocol.spec.McpSchema.Role;
-import io.modelcontextprotocol.spec.McpSchema.Root;
-import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
-import io.modelcontextprotocol.spec.McpSchema.Tool;
+import io.modelcontextprotocol.spec.McpSchema.*;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.LifecycleState;
 import org.apache.catalina.startup.Tomcat;
@@ -40,7 +27,13 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-import org.springframework.web.client.RestClient;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -60,6 +53,8 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	McpClient.SyncSpec clientBuilder;
 
 	private Tomcat tomcat;
+
+	private static final OkHttpClient HTTP_CLIENT = new OkHttpClient();
 
 	@BeforeEach
 	public void before() {
@@ -115,17 +110,17 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 					return Mono.just(mock(CallToolResult.class));
 				});
 
-		var server = McpServer.async(mcpServerTransportProvider).serverInfo("test-server", "1.0.0").tools(tool).build();
+		McpAsyncServer server = McpServer.async(mcpServerTransportProvider).serverInfo("test-server", "1.0.0").tools(tool).build();
 
 		try (
 				// Create client without sampling capabilities
-				var client = clientBuilder.clientInfo(new McpSchema.Implementation("Sample " + "client", "0.0.0"))
+				McpSyncClient client = clientBuilder.clientInfo(new McpSchema.Implementation("Sample " + "client", "0.0.0"))
 					.build()) {
 
 			assertThat(client.initialize()).isNotNull();
 
 			try {
-				client.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+				client.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 			}
 			catch (McpError e) {
 				assertThat(e).isInstanceOf(McpError.class)
@@ -139,24 +134,24 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	void testCreateMessageSuccess() {
 
 		Function<CreateMessageRequest, CreateMessageResult> samplingHandler = request -> {
-			assertThat(request.messages()).hasSize(1);
-			assertThat(request.messages().get(0).content()).isInstanceOf(McpSchema.TextContent.class);
+			assertThat(request.getMessages()).hasSize(1);
+			assertThat(request.getMessages().get(0).getContent()).isInstanceOf(McpSchema.TextContent.class);
 
 			return new CreateMessageResult(Role.USER, new McpSchema.TextContent("Test message"), "MockModelName",
 					CreateMessageResult.StopReason.STOP_SEQUENCE);
 		};
 
-		CallToolResult callResponse = new McpSchema.CallToolResult(List.of(new McpSchema.TextContent("CALL RESPONSE")),
+		CallToolResult callResponse = new McpSchema.CallToolResult(Collections.singletonList(new McpSchema.TextContent("CALL RESPONSE")),
 				null);
 
 		McpServerFeatures.AsyncToolSpecification tool = new McpServerFeatures.AsyncToolSpecification(
 				new McpSchema.Tool("tool1", "tool1 description", emptyJsonSchema), (exchange, request) -> {
 
-					var createMessageRequest = McpSchema.CreateMessageRequest.builder()
-						.messages(List.of(new McpSchema.SamplingMessage(McpSchema.Role.USER,
+			CreateMessageRequest createMessageRequest = McpSchema.CreateMessageRequest.builder()
+						.messages(Arrays.asList(new McpSchema.SamplingMessage(McpSchema.Role.USER,
 								new McpSchema.TextContent("Test message"))))
 						.modelPreferences(ModelPreferences.builder()
-							.hints(List.of())
+							.hints(Collections.emptyList())
 							.costPriority(1.0)
 							.speedPriority(1.0)
 							.intelligencePriority(1.0)
@@ -165,22 +160,22 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 
 					StepVerifier.create(exchange.createMessage(createMessageRequest)).consumeNextWith(result -> {
 						assertThat(result).isNotNull();
-						assertThat(result.role()).isEqualTo(Role.USER);
-						assertThat(result.content()).isInstanceOf(McpSchema.TextContent.class);
-						assertThat(((McpSchema.TextContent) result.content()).text()).isEqualTo("Test message");
-						assertThat(result.model()).isEqualTo("MockModelName");
-						assertThat(result.stopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
+						assertThat(result.getRole()).isEqualTo(Role.USER);
+						assertThat(result.getContent()).isInstanceOf(McpSchema.TextContent.class);
+						assertThat(((McpSchema.TextContent) result.getContent()).getText()).isEqualTo("Test message");
+						assertThat(result.getModel()).isEqualTo("MockModelName");
+						assertThat(result.getStopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
 					}).verifyComplete();
 
 					return Mono.just(callResponse);
 				});
 
-		var mcpServer = McpServer.async(mcpServerTransportProvider)
+		McpAsyncServer mcpServer = McpServer.async(mcpServerTransportProvider)
 			.serverInfo("test-server", "1.0.0")
 			.tools(tool)
 			.build();
 
-		try (var mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
+		try (McpSyncClient mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
 			.capabilities(ClientCapabilities.builder().sampling().build())
 			.sampling(samplingHandler)
 			.build()) {
@@ -188,7 +183,7 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 			InitializeResult initResult = mcpClient.initialize();
 			assertThat(initResult).isNotNull();
 
-			CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+			CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 
 			assertThat(response).isNotNull();
 			assertThat(response).isEqualTo(callResponse);
@@ -202,8 +197,8 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 		// Client
 
 		Function<CreateMessageRequest, CreateMessageResult> samplingHandler = request -> {
-			assertThat(request.messages()).hasSize(1);
-			assertThat(request.messages().get(0).content()).isInstanceOf(McpSchema.TextContent.class);
+			assertThat(request.getMessages()).hasSize(1);
+			assertThat(request.getMessages().get(0).getContent()).isInstanceOf(McpSchema.TextContent.class);
 			try {
 				TimeUnit.SECONDS.sleep(2);
 			}
@@ -214,43 +209,43 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 					CreateMessageResult.StopReason.STOP_SEQUENCE);
 		};
 
-		var mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
+		McpSyncClient mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
 			.capabilities(ClientCapabilities.builder().sampling().build())
 			.sampling(samplingHandler)
 			.build();
 
 		// Server
 
-		CallToolResult callResponse = new McpSchema.CallToolResult(List.of(new McpSchema.TextContent("CALL RESPONSE")),
+		CallToolResult callResponse = new McpSchema.CallToolResult(Collections.singletonList(new McpSchema.TextContent("CALL RESPONSE")),
 				null);
 
 		McpServerFeatures.AsyncToolSpecification tool = new McpServerFeatures.AsyncToolSpecification(
 				new McpSchema.Tool("tool1", "tool1 description", emptyJsonSchema), (exchange, request) -> {
 
-					var craeteMessageRequest = McpSchema.CreateMessageRequest.builder()
-						.messages(List.of(new McpSchema.SamplingMessage(McpSchema.Role.USER,
+			CreateMessageRequest createMessageRequest = McpSchema.CreateMessageRequest.builder()
+						.messages(Arrays.asList(new McpSchema.SamplingMessage(McpSchema.Role.USER,
 								new McpSchema.TextContent("Test message"))))
 						.modelPreferences(ModelPreferences.builder()
-							.hints(List.of())
+							.hints(Collections.emptyList())
 							.costPriority(1.0)
 							.speedPriority(1.0)
 							.intelligencePriority(1.0)
 							.build())
 						.build();
 
-					StepVerifier.create(exchange.createMessage(craeteMessageRequest)).consumeNextWith(result -> {
+					StepVerifier.create(exchange.createMessage(createMessageRequest)).consumeNextWith(result -> {
 						assertThat(result).isNotNull();
-						assertThat(result.role()).isEqualTo(Role.USER);
-						assertThat(result.content()).isInstanceOf(McpSchema.TextContent.class);
-						assertThat(((McpSchema.TextContent) result.content()).text()).isEqualTo("Test message");
-						assertThat(result.model()).isEqualTo("MockModelName");
-						assertThat(result.stopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
+						assertThat(result.getRole()).isEqualTo(Role.USER);
+						assertThat(result.getContent()).isInstanceOf(McpSchema.TextContent.class);
+						assertThat(((McpSchema.TextContent) result.getContent()).getText()).isEqualTo("Test message");
+						assertThat(result.getModel()).isEqualTo("MockModelName");
+						assertThat(result.getStopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
 					}).verifyComplete();
 
 					return Mono.just(callResponse);
 				});
 
-		var mcpServer = McpServer.async(mcpServerTransportProvider)
+		McpAsyncServer mcpServer = McpServer.async(mcpServerTransportProvider)
 			.serverInfo("test-server", "1.0.0")
 			.requestTimeout(Duration.ofSeconds(3))
 			.tools(tool)
@@ -259,7 +254,7 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 		InitializeResult initResult = mcpClient.initialize();
 		assertThat(initResult).isNotNull();
 
-		CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+		CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 
 		assertThat(response).isNotNull();
 		assertThat(response).isEqualTo(callResponse);
@@ -274,8 +269,8 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 		// Client
 
 		Function<CreateMessageRequest, CreateMessageResult> samplingHandler = request -> {
-			assertThat(request.messages()).hasSize(1);
-			assertThat(request.messages().get(0).content()).isInstanceOf(McpSchema.TextContent.class);
+			assertThat(request.getMessages()).hasSize(1);
+			assertThat(request.getMessages().get(0).getContent()).isInstanceOf(McpSchema.TextContent.class);
 			try {
 				TimeUnit.SECONDS.sleep(2);
 			}
@@ -286,43 +281,43 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 					CreateMessageResult.StopReason.STOP_SEQUENCE);
 		};
 
-		var mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
+		McpSyncClient mcpClient = clientBuilder.clientInfo(new McpSchema.Implementation("Sample client", "0.0.0"))
 			.capabilities(ClientCapabilities.builder().sampling().build())
 			.sampling(samplingHandler)
 			.build();
 
 		// Server
 
-		CallToolResult callResponse = new McpSchema.CallToolResult(List.of(new McpSchema.TextContent("CALL RESPONSE")),
+		CallToolResult callResponse = new McpSchema.CallToolResult(Collections.singletonList(new McpSchema.TextContent("CALL RESPONSE")),
 				null);
 
 		McpServerFeatures.AsyncToolSpecification tool = new McpServerFeatures.AsyncToolSpecification(
 				new McpSchema.Tool("tool1", "tool1 description", emptyJsonSchema), (exchange, request) -> {
 
-					var craeteMessageRequest = McpSchema.CreateMessageRequest.builder()
-						.messages(List.of(new McpSchema.SamplingMessage(McpSchema.Role.USER,
+			CreateMessageRequest createMessageRequest = McpSchema.CreateMessageRequest.builder()
+						.messages(Arrays.asList(new McpSchema.SamplingMessage(McpSchema.Role.USER,
 								new McpSchema.TextContent("Test message"))))
 						.modelPreferences(ModelPreferences.builder()
-							.hints(List.of())
+							.hints(Collections.emptyList())
 							.costPriority(1.0)
 							.speedPriority(1.0)
 							.intelligencePriority(1.0)
 							.build())
 						.build();
 
-					StepVerifier.create(exchange.createMessage(craeteMessageRequest)).consumeNextWith(result -> {
+					StepVerifier.create(exchange.createMessage(createMessageRequest)).consumeNextWith(result -> {
 						assertThat(result).isNotNull();
-						assertThat(result.role()).isEqualTo(Role.USER);
-						assertThat(result.content()).isInstanceOf(McpSchema.TextContent.class);
-						assertThat(((McpSchema.TextContent) result.content()).text()).isEqualTo("Test message");
-						assertThat(result.model()).isEqualTo("MockModelName");
-						assertThat(result.stopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
+						assertThat(result.getRole()).isEqualTo(Role.USER);
+						assertThat(result.getContent()).isInstanceOf(McpSchema.TextContent.class);
+						assertThat(((McpSchema.TextContent) result.getContent()).getText()).isEqualTo("Test message");
+						assertThat(result.getModel()).isEqualTo("MockModelName");
+						assertThat(result.getStopReason()).isEqualTo(CreateMessageResult.StopReason.STOP_SEQUENCE);
 					}).verifyComplete();
 
 					return Mono.just(callResponse);
 				});
 
-		var mcpServer = McpServer.async(mcpServerTransportProvider)
+		McpAsyncServer mcpServer = McpServer.async(mcpServerTransportProvider)
 			.serverInfo("test-server", "1.0.0")
 			.requestTimeout(Duration.ofSeconds(1))
 			.tools(tool)
@@ -332,7 +327,7 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 		assertThat(initResult).isNotNull();
 
 		assertThatExceptionOfType(McpError.class).isThrownBy(() -> {
-			mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+			mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 		}).withMessageContaining("Timeout");
 
 		mcpClient.close();
@@ -344,15 +339,15 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	// ---------------------------------------
 	@Test
 	void testRootsSuccess() {
-		List<Root> roots = List.of(new Root("uri1://", "root1"), new Root("uri2://", "root2"));
+		List<Root> roots = Arrays.asList(new Root("uri1://", "root1"), new Root("uri2://", "root2"));
 
 		AtomicReference<List<Root>> rootsRef = new AtomicReference<>();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.rootsChangeHandler((exchange, rootsUpdate) -> rootsRef.set(rootsUpdate))
 			.build();
 
-		try (var mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
+		try (McpSyncClient mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
 			.roots(roots)
 			.build()) {
 
@@ -368,18 +363,18 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 			});
 
 			// Remove a root
-			mcpClient.removeRoot(roots.get(0).uri());
+			mcpClient.removeRoot(roots.get(0).getUri());
 
 			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-				assertThat(rootsRef.get()).containsAll(List.of(roots.get(1)));
+				assertThat(rootsRef.get()).containsAll(Collections.singletonList(roots.get(1)));
 			});
 
 			// Add a new root
-			var root3 = new Root("uri3://", "root3");
+			Root root3 = new Root("uri3://", "root3");
 			mcpClient.addRoot(root3);
 
 			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-				assertThat(rootsRef.get()).containsAll(List.of(roots.get(1), root3));
+				assertThat(rootsRef.get()).containsAll(Arrays.asList(roots.get(1), root3));
 			});
 
 			mcpServer.close();
@@ -397,16 +392,16 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 					return mock(CallToolResult.class);
 				});
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider).rootsChangeHandler((exchange, rootsUpdate) -> {
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider).rootsChangeHandler((exchange, rootsUpdate) -> {
 		}).tools(tool).build();
 
-		try (var mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().build()).build()) {
+		try (McpSyncClient mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().build()).build()) {
 
 			assertThat(mcpClient.initialize()).isNotNull();
 
 			// Attempt to list roots should fail
 			try {
-				mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+				mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 			}
 			catch (McpError e) {
 				assertThat(e).isInstanceOf(McpError.class).hasMessage("Roots not supported");
@@ -420,12 +415,12 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	void testRootsNotificationWithEmptyRootsList() {
 		AtomicReference<List<Root>> rootsRef = new AtomicReference<>();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.rootsChangeHandler((exchange, rootsUpdate) -> rootsRef.set(rootsUpdate))
 			.build();
 
-		try (var mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
-			.roots(List.of()) // Empty roots list
+		try (McpSyncClient mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
+			.roots(Collections.emptyList()) // Empty roots list
 			.build()) {
 
 			InitializeResult initResult = mcpClient.initialize();
@@ -443,17 +438,17 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 
 	@Test
 	void testRootsWithMultipleHandlers() {
-		List<Root> roots = List.of(new Root("uri1://", "root1"));
+		List<Root> roots = Arrays.asList(new Root("uri1://", "root1"));
 
 		AtomicReference<List<Root>> rootsRef1 = new AtomicReference<>();
 		AtomicReference<List<Root>> rootsRef2 = new AtomicReference<>();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.rootsChangeHandler((exchange, rootsUpdate) -> rootsRef1.set(rootsUpdate))
 			.rootsChangeHandler((exchange, rootsUpdate) -> rootsRef2.set(rootsUpdate))
 			.build();
 
-		try (var mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
+		try (McpSyncClient mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
 			.roots(roots)
 			.build()) {
 
@@ -472,15 +467,15 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 
 	@Test
 	void testRootsServerCloseWithActiveSubscription() {
-		List<Root> roots = List.of(new Root("uri1://", "root1"));
+		List<Root> roots = Arrays.asList(new Root("uri1://", "root1"));
 
 		AtomicReference<List<Root>> rootsRef = new AtomicReference<>();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.rootsChangeHandler((exchange, rootsUpdate) -> rootsRef.set(rootsUpdate))
 			.build();
 
-		try (var mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
+		try (McpSyncClient mcpClient = clientBuilder.capabilities(ClientCapabilities.builder().roots(true).build())
 			.roots(roots)
 			.build()) {
 
@@ -501,42 +496,45 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	// Tools Tests
 	// ---------------------------------------
 
-	String emptyJsonSchema = """
-			{
-				"$schema": "http://json-schema.org/draft-07/schema#",
-				"type": "object",
-				"properties": {}
-			}
-			""";
+	String emptyJsonSchema = "{" +
+			"\"$schema\": \"http://json-schema.org/draft-07/schema#\"," +
+			"\"type\": \"object\"," +
+			"\"properties\": {}" +
+			"}";
 
 	@Test
 	void testToolCallSuccess() {
 
-		var callResponse = new McpSchema.CallToolResult(List.of(new McpSchema.TextContent("CALL RESPONSE")), null);
+		CallToolResult callResponse = new McpSchema.CallToolResult(Collections.singletonList(new McpSchema.TextContent("CALL RESPONSE")), null);
 		McpServerFeatures.SyncToolSpecification tool1 = new McpServerFeatures.SyncToolSpecification(
 				new McpSchema.Tool("tool1", "tool1 description", emptyJsonSchema), (exchange, request) -> {
-					// perform a blocking call to a remote service
-					String response = RestClient.create()
-						.get()
-						.uri("https://raw.githubusercontent.com/modelcontextprotocol/java-sdk/refs/heads/main/README.md")
-						.retrieve()
-						.body(String.class);
-					assertThat(response).isNotBlank();
-					return callResponse;
-				});
+			// perform a blocking call to a remote service
+			Request req = new Request.Builder()
+					.url("https://www.baidu.com/")
+					.build();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+			try (Response response = HTTP_CLIENT.newCall(req).execute()) {
+				assert response.body() != null;
+				String body = response.body().string();
+				assertThat(body).isNotBlank();
+			} catch (IOException e) {
+				throw new RuntimeException(e);
+			}
+			return callResponse;
+		});
+
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.capabilities(ServerCapabilities.builder().tools(true).build())
 			.tools(tool1)
 			.build();
 
-		try (var mcpClient = clientBuilder.build()) {
+		try (McpSyncClient mcpClient = clientBuilder.build()) {
 			InitializeResult initResult = mcpClient.initialize();
 			assertThat(initResult).isNotNull();
 
-			assertThat(mcpClient.listTools().tools()).contains(tool1.tool());
+			assertThat(mcpClient.listTools().getTools()).contains(tool1.getTool());
 
-			CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Map.of()));
+			CallToolResult response = mcpClient.callTool(new McpSchema.CallToolRequest("tool1", Collections.emptyMap()));
 
 			assertThat(response).isNotNull();
 			assertThat(response).isEqualTo(callResponse);
@@ -548,34 +546,44 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 	@Test
 	void testToolListChangeHandlingSuccess() {
 
-		var callResponse = new McpSchema.CallToolResult(List.of(new McpSchema.TextContent("CALL RESPONSE")), null);
+		CallToolResult callResponse = new McpSchema.CallToolResult(Collections.singletonList(new McpSchema.TextContent("CALL RESPONSE")), null);
 		McpServerFeatures.SyncToolSpecification tool1 = new McpServerFeatures.SyncToolSpecification(
 				new McpSchema.Tool("tool1", "tool1 description", emptyJsonSchema), (exchange, request) -> {
-					// perform a blocking call to a remote service
-					String response = RestClient.create()
-						.get()
-						.uri("https://raw.githubusercontent.com/modelcontextprotocol/java-sdk/refs/heads/main/README.md")
-						.retrieve()
-						.body(String.class);
-					assertThat(response).isNotBlank();
-					return callResponse;
-				});
+			// perform a blocking call to a remote service
+			Request req = new Request.Builder()
+					.url("https://www.baidu.com/")
+					.build();
+
+			try (Response response = HTTP_CLIENT.newCall(req).execute()) {
+				assert response.body() != null;
+				String body = response.body().string();
+				assertThat(body).isNotBlank();
+			} catch (IOException e) {
+				throw new RuntimeException(e);
+			}
+			return callResponse;
+		});
 
 		AtomicReference<List<Tool>> rootsRef = new AtomicReference<>();
 
-		var mcpServer = McpServer.sync(mcpServerTransportProvider)
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider)
 			.capabilities(ServerCapabilities.builder().tools(true).build())
 			.tools(tool1)
 			.build();
 
-		try (var mcpClient = clientBuilder.toolsChangeConsumer(toolsUpdate -> {
+		try (McpSyncClient mcpClient = clientBuilder.toolsChangeConsumer(toolsUpdate -> {
 			// perform a blocking call to a remote service
-			String response = RestClient.create()
-				.get()
-				.uri("https://raw.githubusercontent.com/modelcontextprotocol/java-sdk/refs/heads/main/README.md")
-				.retrieve()
-				.body(String.class);
-			assertThat(response).isNotBlank();
+			Request req = new Request.Builder()
+					.url("https://www.baidu.com/")
+					.build();
+
+			try (Response response = HTTP_CLIENT.newCall(req).execute()) {
+				assert response.body() != null;
+				String body = response.body().string();
+				assertThat(body).isNotBlank();
+			} catch (IOException e) {
+				throw new RuntimeException(e);
+			}
 			rootsRef.set(toolsUpdate);
 		}).build()) {
 
@@ -584,12 +592,12 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 
 			assertThat(rootsRef.get()).isNull();
 
-			assertThat(mcpClient.listTools().tools()).contains(tool1.tool());
+			assertThat(mcpClient.listTools().getTools()).contains(tool1.getTool());
 
 			mcpServer.notifyToolsListChanged();
 
 			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-				assertThat(rootsRef.get()).containsAll(List.of(tool1.tool()));
+				assertThat(rootsRef.get()).containsAll(Collections.singletonList(tool1.getTool()));
 			});
 
 			// Remove a tool
@@ -607,7 +615,7 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 			mcpServer.addTool(tool2);
 
 			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-				assertThat(rootsRef.get()).containsAll(List.of(tool2.tool()));
+				assertThat(rootsRef.get()).containsAll(Collections.singletonList(tool2.getTool()));
 			});
 		}
 
@@ -616,9 +624,9 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 
 	@Test
 	void testInitialize() {
-		var mcpServer = McpServer.sync(mcpServerTransportProvider).build();
+		McpSyncServer mcpServer = McpServer.sync(mcpServerTransportProvider).build();
 
-		try (var mcpClient = clientBuilder.build()) {
+		try (McpSyncClient mcpClient = clientBuilder.build()) {
 
 			InitializeResult initResult = mcpClient.initialize();
 			assertThat(initResult).isNotNull();
@@ -690,14 +698,14 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 					return Mono.just(new CallToolResult("Logging test completed", false));
 				});
 
-		var mcpServer = McpServer.async(mcpServerTransportProvider)
+		McpAsyncServer mcpServer = McpServer.async(mcpServerTransportProvider)
 			.serverInfo("test-server", "1.0.0")
 			.capabilities(ServerCapabilities.builder().logging().tools(true).build())
 			.tools(tool)
 			.build();
 		try (
 				// Create client with logging notification handler
-				var mcpClient = clientBuilder.loggingConsumer(notification -> {
+				McpSyncClient mcpClient = clientBuilder.loggingConsumer(notification -> {
 					receivedNotifications.add(notification);
 				}).build()) {
 
@@ -709,10 +717,10 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 			mcpClient.setLoggingLevel(McpSchema.LoggingLevel.NOTICE);
 
 			// Call the tool that sends logging notifications
-			CallToolResult result = mcpClient.callTool(new McpSchema.CallToolRequest("logging-test", Map.of()));
+			CallToolResult result = mcpClient.callTool(new McpSchema.CallToolRequest("logging-test", Collections.emptyMap()));
 			assertThat(result).isNotNull();
-			assertThat(result.content().get(0)).isInstanceOf(McpSchema.TextContent.class);
-			assertThat(((McpSchema.TextContent) result.content().get(0)).text()).isEqualTo("Logging test completed");
+			assertThat(result.getContent().get(0)).isInstanceOf(McpSchema.TextContent.class);
+			assertThat(((McpSchema.TextContent) result.getContent().get(0)).getText()).isEqualTo("Logging test completed");
 
 			// Wait for notifications to be processed
 			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
@@ -723,23 +731,23 @@ class HttpServletSseServerTransportProviderIntegrationTests {
 				assertThat(receivedNotifications).hasSize(3);
 
 				Map<String, McpSchema.LoggingMessageNotification> notificationMap = receivedNotifications.stream()
-					.collect(Collectors.toMap(n -> n.data(), n -> n));
+					.collect(Collectors.toMap(n -> n.getData(), n -> n));
 
 				// First notification should be NOTICE level
-				assertThat(notificationMap.get("Notice message").level()).isEqualTo(McpSchema.LoggingLevel.NOTICE);
-				assertThat(notificationMap.get("Notice message").logger()).isEqualTo("test-logger");
-				assertThat(notificationMap.get("Notice message").data()).isEqualTo("Notice message");
+				assertThat(notificationMap.get("Notice message").getLevel()).isEqualTo(McpSchema.LoggingLevel.NOTICE);
+				assertThat(notificationMap.get("Notice message").getLogger()).isEqualTo("test-logger");
+				assertThat(notificationMap.get("Notice message").getData()).isEqualTo("Notice message");
 
 				// Second notification should be ERROR level
-				assertThat(notificationMap.get("Error message").level()).isEqualTo(McpSchema.LoggingLevel.ERROR);
-				assertThat(notificationMap.get("Error message").logger()).isEqualTo("test-logger");
-				assertThat(notificationMap.get("Error message").data()).isEqualTo("Error message");
+				assertThat(notificationMap.get("Error message").getLevel()).isEqualTo(McpSchema.LoggingLevel.ERROR);
+				assertThat(notificationMap.get("Error message").getLogger()).isEqualTo("test-logger");
+				assertThat(notificationMap.get("Error message").getData()).isEqualTo("Error message");
 
 				// Third notification should be ERROR level
-				assertThat(notificationMap.get("Another error message").level())
+				assertThat(notificationMap.get("Another error message").getLevel())
 					.isEqualTo(McpSchema.LoggingLevel.ERROR);
-				assertThat(notificationMap.get("Another error message").logger()).isEqualTo("test-logger");
-				assertThat(notificationMap.get("Another error message").data()).isEqualTo("Another error message");
+				assertThat(notificationMap.get("Another error message").getLogger()).isEqualTo("test-logger");
+				assertThat(notificationMap.get("Another error message").getData()).isEqualTo("Another error message");
 			});
 		}
 		mcpServer.close();

@@ -3,18 +3,12 @@
 */
 package io.modelcontextprotocol.spec;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
-import io.modelcontextprotocol.spec.McpSchema.TextResourceContents;
 import net.javacrumbs.jsonunit.core.Option;
 import org.junit.jupiter.api.Test;
+
+import java.util.*;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.json;
@@ -38,25 +32,22 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"type":"text","text":"XXX"}"""));
+			.isEqualTo(json("{\"type\":\"text\",\"text\":\"XXX\"}"));
 	}
 
 	@Test
 	void testTextContentDeserialization() throws Exception {
-		McpSchema.TextContent textContent = mapper.readValue("""
-				{"type":"text","text":"XXX"}""", McpSchema.TextContent.class);
+		McpSchema.TextContent textContent = mapper.readValue("{\"type\":\"text\",\"text\":\"XXX\"}",
+				McpSchema.TextContent.class);
 
 		assertThat(textContent).isNotNull();
 		assertThat(textContent.type()).isEqualTo("text");
-		assertThat(textContent.text()).isEqualTo("XXX");
+		assertThat(textContent.getText()).isEqualTo("XXX");
 	}
 
 	@Test
-	void testContentDeserializationWrongType() throws Exception {
-
-		assertThatThrownBy(() -> mapper.readValue("""
-				{"type":"WRONG","text":"XXX"}""", McpSchema.TextContent.class))
+	void testContentDeserializationWrongType() {
+		assertThatThrownBy(() -> mapper.readValue("{\"type\":\"WRONG\",\"text\":\"XXX\"}", McpSchema.TextContent.class))
 			.isInstanceOf(InvalidTypeIdException.class)
 			.hasMessageContaining(
 					"Could not resolve type id 'WRONG' as a subtype of `io.modelcontextprotocol.spec.McpSchema$TextContent`: known type ids = [image, resource, text]");
@@ -70,18 +61,18 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"type":"image","data":"base64encodeddata","mimeType":"image/png"}"""));
+			.isEqualTo(json("{\"type\":\"image\",\"data\":\"base64encodeddata\",\"mimeType\":\"image/png\"}"));
 	}
 
 	@Test
 	void testImageContentDeserialization() throws Exception {
-		McpSchema.ImageContent imageContent = mapper.readValue("""
-				{"type":"image","data":"base64encodeddata","mimeType":"image/png"}""", McpSchema.ImageContent.class);
+		McpSchema.ImageContent imageContent =
+				mapper.readValue("{\"type\":\"image\",\"data\":\"base64encodeddata\",\"mimeType\":\"image/png\"}",
+						McpSchema.ImageContent.class);
 		assertThat(imageContent).isNotNull();
 		assertThat(imageContent.type()).isEqualTo("image");
-		assertThat(imageContent.data()).isEqualTo("base64encodeddata");
-		assertThat(imageContent.mimeType()).isEqualTo("image/png");
+		assertThat(imageContent.getData()).isEqualTo("base64encodeddata");
+		assertThat(imageContent.getMimeType()).isEqualTo("image/png");
 	}
 
 	@Test
@@ -96,22 +87,20 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"type":"resource","resource":{"uri":"resource://test","mimeType":"text/plain","text":"Sample resource content"}}"""));
+					json("{\"type\":\"resource\",\"resource\":{\"uri\":\"resource://test\",\"mimeType\":\"text/plain\",\"text\":\"Sample resource content\"}}"));
 	}
 
 	@Test
 	void testEmbeddedResourceDeserialization() throws Exception {
 		McpSchema.EmbeddedResource embeddedResource = mapper.readValue(
-				"""
-						{"type":"resource","resource":{"uri":"resource://test","mimeType":"text/plain","text":"Sample resource content"}}""",
+				"{\"type\":\"resource\",\"resource\":{\"uri\":\"resource://test\",\"mimeType\":\"text/plain\",\"text\":\"Sample resource content\"}}",
 				McpSchema.EmbeddedResource.class);
 		assertThat(embeddedResource).isNotNull();
 		assertThat(embeddedResource.type()).isEqualTo("resource");
-		assertThat(embeddedResource.resource()).isNotNull();
-		assertThat(embeddedResource.resource().uri()).isEqualTo("resource://test");
-		assertThat(embeddedResource.resource().mimeType()).isEqualTo("text/plain");
-		assertThat(((TextResourceContents) embeddedResource.resource()).text()).isEqualTo("Sample resource content");
+		assertThat(embeddedResource.getResource()).isNotNull();
+		assertThat(embeddedResource.getResource().uri()).isEqualTo("resource://test");
+		assertThat(embeddedResource.getResource().mimeType()).isEqualTo("text/plain");
+		assertThat(((McpSchema.TextResourceContents) embeddedResource.getResource()).getText()).isEqualTo("Sample resource content");
 	}
 
 	@Test
@@ -126,22 +115,20 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"type":"resource","resource":{"uri":"resource://test","mimeType":"application/octet-stream","blob":"base64encodedblob"}}"""));
+					json("{\"type\":\"resource\",\"resource\":{\"uri\":\"resource://test\",\"mimeType\":\"application/octet-stream\",\"blob\":\"base64encodedblob\"}}"));
 	}
 
 	@Test
 	void testEmbeddedResourceWithBlobContentsDeserialization() throws Exception {
 		McpSchema.EmbeddedResource embeddedResource = mapper.readValue(
-				"""
-						{"type":"resource","resource":{"uri":"resource://test","mimeType":"application/octet-stream","blob":"base64encodedblob"}}""",
+				"{\"type\":\"resource\",\"resource\":{\"uri\":\"resource://test\",\"mimeType\":\"application/octet-stream\",\"blob\":\"base64encodedblob\"}}",
 				McpSchema.EmbeddedResource.class);
 		assertThat(embeddedResource).isNotNull();
 		assertThat(embeddedResource.type()).isEqualTo("resource");
-		assertThat(embeddedResource.resource()).isNotNull();
-		assertThat(embeddedResource.resource().uri()).isEqualTo("resource://test");
-		assertThat(embeddedResource.resource().mimeType()).isEqualTo("application/octet-stream");
-		assertThat(((McpSchema.BlobResourceContents) embeddedResource.resource()).blob())
+		assertThat(embeddedResource.getResource()).isNotNull();
+		assertThat(embeddedResource.getResource().uri()).isEqualTo("resource://test");
+		assertThat(embeddedResource.getResource().mimeType()).isEqualTo("application/octet-stream");
+		assertThat(((McpSchema.BlobResourceContents) embeddedResource.getResource()).getBlob())
 			.isEqualTo("base64encodedblob");
 	}
 
@@ -159,8 +146,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"jsonrpc":"2.0","method":"method_name","id":1,"params":{"key":"value"}}"""));
+			.isEqualTo(json("{\"jsonrpc\":\"2.0\",\"method\":\"method_name\",\"id\":1,\"params\":{\"key\":\"value\"}}"));
 	}
 
 	@Test
@@ -175,8 +161,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"jsonrpc":"2.0","method":"notification_method","params":{"key":"value"}}"""));
+			.isEqualTo(json("{\"jsonrpc\":\"2.0\",\"method\":\"notification_method\",\"params\":{\"key\":\"value\"}}"));
 	}
 
 	@Test
@@ -190,8 +175,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"jsonrpc":"2.0","id":1,"result":{"result_key":"result_value"}}"""));
+			.isEqualTo(json("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"result_key\":\"result_value\"}}"));
 	}
 
 	@Test
@@ -205,8 +189,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}"""));
+			.isEqualTo(json("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32600,\"message\":\"Invalid request\"}}"));
 	}
 
 	// Initialization Tests
@@ -227,8 +210,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"protocolVersion":"2024-11-05","capabilities":{"roots":{"listChanged":true},"sampling":{}},"clientInfo":{"name":"test-client","version":"1.0.0"}}"""));
+					json("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"roots\":{\"listChanged\":true},\"sampling\":{}},\"clientInfo\":{\"name\":\"test-client\",\"version\":\"1.0.0\"}}"));
 	}
 
 	@Test
@@ -250,8 +232,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"protocolVersion":"2024-11-05","capabilities":{"logging":{},"prompts":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"test-server","version":"1.0.0"},"instructions":"Server initialized successfully"}"""));
+					json("{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"logging\":{},\"prompts\":{\"listChanged\":true},\"resources\":{\"subscribe\":true,\"listChanged\":true},\"tools\":{\"listChanged\":true}},\"serverInfo\":{\"name\":\"test-server\",\"version\":\"1.0.0\"},\"instructions\":\"Server initialized successfully\"}"));
 	}
 
 	// Resource Tests
@@ -269,8 +250,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"uri":"resource://test","name":"Test Resource","description":"A test resource","mimeType":"text/plain","annotations":{"audience":["user","assistant"],"priority":0.8}}"""));
+					json("{\"uri\":\"resource://test\",\"name\":\"Test Resource\",\"description\":\"A test resource\",\"mimeType\":\"text/plain\",\"annotations\":{\"audience\":[\"user\",\"assistant\"],\"priority\":0.8}}"));
 	}
 
 	@Test
@@ -285,8 +265,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"uriTemplate":"resource://{param}/test","name":"Test Template","description":"A test resource template","mimeType":"text/plain","annotations":{"audience":["user"],"priority":0.5}}"""));
+					json("{\"uriTemplate\":\"resource://{param}/test\",\"name\":\"Test Template\",\"description\":\"A test resource template\",\"mimeType\":\"text/plain\",\"annotations\":{\"audience\":[\"user\"],\"priority\":0.5}}"));
 	}
 
 	@Test
@@ -305,8 +284,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"resources":[{"uri":"resource://test1","name":"Test Resource 1","description":"First test resource","mimeType":"text/plain"},{"uri":"resource://test2","name":"Test Resource 2","description":"Second test resource","mimeType":"application/json"}],"nextCursor":"next-cursor"}"""));
+					json("{\"resources\":[{\"uri\":\"resource://test1\",\"name\":\"Test Resource 1\",\"description\":\"First test resource\",\"mimeType\":\"text/plain\"},{\"uri\":\"resource://test2\",\"name\":\"Test Resource 2\",\"description\":\"Second test resource\",\"mimeType\":\"application/json\"}],\"nextCursor\":\"next-cursor\"}"));
 	}
 
 	@Test
@@ -325,8 +303,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"resourceTemplates":[{"uriTemplate":"resource://{param}/test1","name":"Test Template 1","description":"First test template","mimeType":"text/plain"},{"uriTemplate":"resource://{param}/test2","name":"Test Template 2","description":"Second test template","mimeType":"application/json"}],"nextCursor":"next-cursor"}"""));
+					json("{\"resourceTemplates\":[{\"uriTemplate\":\"resource://{param}/test1\",\"name\":\"Test Template 1\",\"description\":\"First test template\",\"mimeType\":\"text/plain\"},{\"uriTemplate\":\"resource://{param}/test2\",\"name\":\"Test Template 2\",\"description\":\"Second test template\",\"mimeType\":\"application/json\"}],\"nextCursor\":\"next-cursor\"}"));
 	}
 
 	@Test
@@ -337,8 +314,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"uri":"resource://test"}"""));
+			.isEqualTo(json("{\"uri\":\"resource://test\"}"));
 	}
 
 	@Test
@@ -356,8 +332,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"contents":[{"uri":"resource://test1","mimeType":"text/plain","text":"Sample text content"},{"uri":"resource://test2","mimeType":"application/octet-stream","blob":"base64encodedblob"}]}"""));
+					json("{\"contents\":[{\"uri\":\"resource://test1\",\"mimeType\":\"text/plain\",\"text\":\"Sample text content\"},{\"uri\":\"resource://test2\",\"mimeType\":\"application/octet-stream\",\"blob\":\"base64encodedblob\"}]}"));
 	}
 
 	// Prompt Tests
@@ -375,8 +350,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"name":"test-prompt","description":"A test prompt","arguments":[{"name":"arg1","description":"First argument","required":true},{"name":"arg2","description":"Second argument","required":false}]}"""));
+					json("{\"name\":\"test-prompt\",\"description\":\"A test prompt\",\"arguments\":[{\"name\":\"arg1\",\"description\":\"First argument\",\"required\":true},{\"name\":\"arg2\",\"description\":\"Second argument\",\"required\":false}]}"));
 	}
 
 	@Test
@@ -389,8 +363,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"role":"user","content":{"type":"text","text":"Hello, world!"}}"""));
+			.isEqualTo(json("{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"Hello, world!\"}}"));
 	}
 
 	@Test
@@ -409,8 +382,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"prompts":[{"name":"prompt1","description":"First prompt","arguments":[{"name":"arg","description":"An argument","required":true}]},{"name":"prompt2","description":"Second prompt","arguments":[]}],"nextCursor":"next-cursor"}"""));
+					json("{\"prompts\":[{\"name\":\"prompt1\",\"description\":\"First prompt\",\"arguments\":[{\"name\":\"arg\",\"description\":\"An argument\",\"required\":true}]},{\"name\":\"prompt2\",\"description\":\"Second prompt\",\"arguments\":[]}],\"nextCursor\":\"next-cursor\"}"));
 	}
 
 	@Test
@@ -421,8 +393,7 @@ public class McpSchemaTests {
 
 		McpSchema.GetPromptRequest request = new McpSchema.GetPromptRequest("test-prompt", arguments);
 
-		assertThat(mapper.readValue("""
-				{"name":"test-prompt","arguments":{"arg1":"value1","arg2":42}}""", McpSchema.GetPromptRequest.class))
+		assertThat(mapper.readValue("{\"name\":\"test-prompt\",\"arguments\":{\"arg1\":\"value1\",\"arg2\":42}}", McpSchema.GetPromptRequest.class))
 			.isEqualTo(request);
 	}
 
@@ -444,38 +415,35 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"description":"A test prompt result","messages":[{"role":"assistant","content":{"type":"text","text":"System message"}},{"role":"user","content":{"type":"text","text":"User message"}}]}"""));
+					json("{\"description\":\"A test prompt result\",\"messages\":[{\"role\":\"assistant\",\"content\":{\"type\":\"text\",\"text\":\"System message\"}},{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"User message\"}}]}"));
 	}
 
 	// Tool Tests
 
 	@Test
 	void testJsonSchema() throws Exception {
-		String schemaJson = """
-				{
-					"type": "object",
-					"properties": {
-						"name": {
-							"type": "string"
-						},
-						"address": {
-							"$ref": "#/$defs/Address"
-						}
-					},
-					"required": ["name"],
-					"$defs": {
-						"Address": {
-							"type": "object",
-							"properties": {
-								"street": {"type": "string"},
-								"city": {"type": "string"}
-							},
-							"required": ["street", "city"]
-						}
-					}
-				}
-				""";
+		String schemaJson = "{" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"name\": {" +
+				"\"type\": \"string\"" +
+				"}," +
+				"\"address\": {" +
+				"\"$ref\": \"#/$defs/Address\"" +
+				"}" +
+				"}," +
+				"\"required\": [\"name\"]," +
+				"\"$defs\": {" +
+				"\"Address\": {" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"street\": {\"type\": \"string\"}," +
+				"\"city\": {\"type\": \"string\"}" +
+				"}," +
+				"\"required\": [\"street\", \"city\"]" +
+				"}" +
+				"}" +
+				"}";
 
 		// Deserialize the original string to a JsonSchema object
 		McpSchema.JsonSchema schema = mapper.readValue(schemaJson, McpSchema.JsonSchema.class);
@@ -495,30 +463,28 @@ public class McpSchemaTests {
 
 	@Test
 	void testJsonSchemaWithDefinitions() throws Exception {
-		String schemaJson = """
-				{
-					"type": "object",
-					"properties": {
-						"name": {
-							"type": "string"
-						},
-						"address": {
-							"$ref": "#/definitions/Address"
-						}
-					},
-					"required": ["name"],
-					"definitions": {
-						"Address": {
-							"type": "object",
-							"properties": {
-								"street": {"type": "string"},
-								"city": {"type": "string"}
-							},
-							"required": ["street", "city"]
-						}
-					}
-				}
-				""";
+		String schemaJson = "{" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"name\": {" +
+				"\"type\": \"string\"" +
+				"}," +
+				"\"address\": {" +
+				"\"$ref\": \"#/definitions/Address\"" +
+				"}" +
+				"}," +
+				"\"required\": [\"name\"]," +
+				"\"definitions\": {" +
+				"\"Address\": {" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"street\": {\"type\": \"string\"}," +
+				"\"city\": {\"type\": \"string\"}" +
+				"}," +
+				"\"required\": [\"street\", \"city\"]" +
+				"}" +
+				"}" +
+				"}";
 
 		// Deserialize the original string to a JsonSchema object
 		McpSchema.JsonSchema schema = mapper.readValue(schemaJson, McpSchema.JsonSchema.class);
@@ -538,20 +504,18 @@ public class McpSchemaTests {
 
 	@Test
 	void testTool() throws Exception {
-		String schemaJson = """
-				{
-					"type": "object",
-					"properties": {
-						"name": {
-							"type": "string"
-						},
-						"value": {
-							"type": "number"
-						}
-					},
-					"required": ["name"]
-				}
-				""";
+		String schemaJson = "{" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"name\": {" +
+				"\"type\": \"string\"" +
+				"}," +
+				"\"value\": {" +
+				"\"type\": \"number\"" +
+				"}" +
+				"}," +
+				"\"required\": [\"name\"]" +
+				"}";
 
 		McpSchema.Tool tool = new McpSchema.Tool("test-tool", "A test tool", schemaJson);
 
@@ -560,32 +524,29 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"name":"test-tool","description":"A test tool","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"number"}},"required":["name"]}}"""));
+					json("{\"name\":\"test-tool\",\"description\":\"A test tool\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"number\"}},\"required\":[\"name\"]}}"));
 	}
 
 	@Test
 	void testToolWithComplexSchema() throws Exception {
-		String complexSchemaJson = """
-				{
-					"type": "object",
-					"$defs": {
-						"Address": {
-							"type": "object",
-							"properties": {
-								"street": {"type": "string"},
-								"city": {"type": "string"}
-							},
-							"required": ["street", "city"]
-						}
-					},
-					"properties": {
-						"name": {"type": "string"},
-						"shippingAddress": {"$ref": "#/$defs/Address"}
-					},
-					"required": ["name", "shippingAddress"]
-				}
-				""";
+		String complexSchemaJson = "{" +
+				"\"type\": \"object\"," +
+				"\"$defs\": {" +
+				"\"Address\": {" +
+				"\"type\": \"object\"," +
+				"\"properties\": {" +
+				"\"street\": {\"type\": \"string\"}," +
+				"\"city\": {\"type\": \"string\"}" +
+				"}," +
+				"\"required\": [\"street\", \"city\"]" +
+				"}" +
+				"}," +
+				"\"properties\": {" +
+				"\"name\": {\"type\": \"string\"}," +
+				"\"shippingAddress\": {\"$ref\": \"#/$defs/Address\"}" +
+				"}," +
+				"\"required\": [\"name\", \"shippingAddress\"]" +
+				"}";
 
 		McpSchema.Tool tool = new McpSchema.Tool("addressTool", "Handles addresses", complexSchemaJson);
 
@@ -602,8 +563,8 @@ public class McpSchemaTests {
 		assertThatJson(serializedAgain).when(Option.IGNORING_ARRAY_ORDER).isEqualTo(json(serialized));
 
 		// Just verify the basic structure was preserved
-		assertThat(deserializedTool.inputSchema().defs()).isNotNull();
-		assertThat(deserializedTool.inputSchema().defs()).containsKey("Address");
+		assertThat(deserializedTool.getInputSchema().getDefs()).isNotNull();
+		assertThat(deserializedTool.getInputSchema().getDefs()).containsKey("Address");
 	}
 
 	@Test
@@ -612,34 +573,29 @@ public class McpSchemaTests {
 		arguments.put("name", "test");
 		arguments.put("value", 42);
 
-		McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("test-tool", arguments);
+		McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("test-tool", mapper.writeValueAsString(arguments));
 
 		String value = mapper.writeValueAsString(request);
 
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"name":"test-tool","arguments":{"name":"test","value":42}}"""));
+			.isEqualTo(json("{\"name\":\"test-tool\",\"arguments\":{\"name\":\"test\",\"value\":42}}"));
 	}
 
 	@Test
 	void testCallToolRequestJsonArguments() throws Exception {
-
-		McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("test-tool", """
-				{
-					"name": "test",
-					"value": 42
-				}
-				""");
+		McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("test-tool", "{" +
+				"\"name\": \"test\"," +
+				"\"value\": 42" +
+				"}");
 
 		String value = mapper.writeValueAsString(request);
 
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"name":"test-tool","arguments":{"name":"test","value":42}}"""));
+			.isEqualTo(json("{\"name\":\"test-tool\",\"arguments\":{\"name\":\"test\",\"value\":42}}"));
 	}
 
 	@Test
@@ -653,8 +609,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"content":[{"type":"text","text":"Tool execution result"}],"isError":false}"""));
+			.isEqualTo(json("{\"content\":[{\"type\":\"text\",\"text\":\"Tool execution result\"}],\"isError\":false}"));
 	}
 
 	@Test
@@ -669,8 +624,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"content":[{"type":"text","text":"Tool execution result"}],"isError":false}"""));
+			.isEqualTo(json("{\"content\":[{\"type\":\"text\",\"text\":\"Tool execution result\"}],\"isError\":false}"));
 	}
 
 	@Test
@@ -690,8 +644,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"content":[{"type":"text","text":"Text result"},{"type":"image","data":"base64data","mimeType":"image/png"}],"isError":false}"""));
+					json("{\"content\":[{\"type\":\"text\",\"text\":\"Text result\"},{\"type\":\"image\",\"data\":\"base64data\",\"mimeType\":\"image/png\"}],\"isError\":false}"));
 	}
 
 	@Test
@@ -708,8 +661,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"content":[{"type":"text","text":"Text result"},{"type":"image","data":"base64data","mimeType":"image/png"}],"isError":true}"""));
+					json("{\"content\":[{\"type\":\"text\",\"text\":\"Text result\"},{\"type\":\"image\",\"data\":\"base64data\",\"mimeType\":\"image/png\"}],\"isError\":true}"));
 	}
 
 	@Test
@@ -724,8 +676,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"content":[{"type":"text","text":"Error: Operation failed"}],"isError":true}"""));
+			.isEqualTo(json("{\"content\":[{\"type\":\"text\",\"text\":\"Error: Operation failed\"}],\"isError\":true}"));
 	}
 
 	@Test
@@ -745,8 +696,7 @@ public class McpSchemaTests {
 		assertThatJson(value1).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"content":[{"type":"text","text":"Simple result"}],"isError":false}"""));
+			.isEqualTo(json("{\"content\":[{\"type\":\"text\",\"text\":\"Simple result\"}],\"isError\":false}"));
 	}
 
 	// Sampling Tests
@@ -782,8 +732,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"messages":[{"role":"user","content":{"type":"text","text":"User message"}}],"modelPreferences":{"hints":[{"name":"gpt-4"}],"costPriority":0.3,"speedPriority":0.7,"intelligencePriority":0.9},"systemPrompt":"You are a helpful assistant","includeContext":"thisServer","temperature":0.7,"maxTokens":1000,"stopSequences":["STOP","END"],"metadata":{"session":"test-session"}}"""));
+					json("{\"messages\":[{\"role\":\"user\",\"content\":{\"type\":\"text\",\"text\":\"User message\"}}],\"modelPreferences\":{\"hints\":[{\"name\":\"gpt-4\"}],\"costPriority\":0.3,\"speedPriority\":0.7,\"intelligencePriority\":0.9},\"systemPrompt\":\"You are a helpful assistant\",\"includeContext\":\"thisServer\",\"temperature\":0.7,\"maxTokens\":1000,\"stopSequences\":[\"STOP\",\"END\"],\"metadata\":{\"session\":\"test-session\"}}"));
 	}
 
 	@Test
@@ -803,8 +752,7 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"role":"assistant","content":{"type":"text","text":"Assistant response"},"model":"gpt-4","stopReason":"endTurn"}"""));
+					json("{\"role\":\"assistant\",\"content\":{\"type\":\"text\",\"text\":\"Assistant response\"},\"model\":\"gpt-4\",\"stopReason\":\"endTurn\"}"));
 	}
 
 	// Roots Tests
@@ -817,8 +765,7 @@ public class McpSchemaTests {
 		assertThatJson(value).when(Option.IGNORING_ARRAY_ORDER)
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
-			.isEqualTo(json("""
-					{"uri":"file:///path/to/root","name":"Test Root"}"""));
+			.isEqualTo(json("{\"uri\":\"file:///path/to/root\",\"name\":\"Test Root\"}"));
 	}
 
 	@Test
@@ -835,9 +782,6 @@ public class McpSchemaTests {
 			.when(Option.IGNORING_EXTRA_ARRAY_ITEMS)
 			.isObject()
 			.isEqualTo(
-					json("""
-							{"roots":[{"uri":"file:///path/to/root1","name":"First Root"},{"uri":"file:///path/to/root2","name":"Second Root"}]}"""));
-
+					json("{\"roots\":[{\"uri\":\"file:///path/to/root1\",\"name\":\"First Root\"},{\"uri\":\"file:///path/to/root2\",\"name\":\"Second Root\"}]}"));
 	}
-
 }
