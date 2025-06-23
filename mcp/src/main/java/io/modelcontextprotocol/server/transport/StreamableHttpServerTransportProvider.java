@@ -311,7 +311,7 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
         String acceptHeader = request.getHeader(ACCEPT_HEADER);
         logger.debug("Accept header: {}", acceptHeader);
         if (acceptHeader == null
-                || (!acceptHeader.contains(APPLICATION_JSON) || !acceptHeader.contains(TEXT_EVENT_STREAM))) {
+                || (!acceptHeader.contains(APPLICATION_JSON) && !acceptHeader.contains(TEXT_EVENT_STREAM))) {
             logger.debug("Accept header validation failed. Header: {}", acceptHeader);
             response.setContentType(APPLICATION_JSON);
             response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -439,12 +439,8 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
                 // For notifications and responses, return 202 Accepted
                 response.setStatus(HttpServletResponse.SC_ACCEPTED);
             }
-        }
-        catch (Exception e) {
+        } catch (Exception e) {
             logger.error("Error processing message: {}", e.getMessage());
-//            response.setContentType(APPLICATION_JSON);
-//            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-//            response.getWriter().write(createErrorJson("Invalid JSON-RPC message: " + e.getMessage()));
             try {
                 McpError mcpError = new McpError(e.getMessage());
                 response.setContentType(APPLICATION_JSON);
