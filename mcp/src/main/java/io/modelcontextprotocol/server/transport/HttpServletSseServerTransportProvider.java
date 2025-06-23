@@ -19,7 +19,10 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -272,7 +275,9 @@ public class HttpServletSseServerTransportProvider extends HttpServlet implement
 		}
 
 		try {
-			BufferedReader reader = request.getReader();
+			Charset charset = request.getCharacterEncoding() == null ?
+					StandardCharsets.UTF_8 : Charset.forName(request.getCharacterEncoding());
+			BufferedReader reader = new BufferedReader(new InputStreamReader(request.getInputStream(), charset));
 			StringBuilder body = new StringBuilder();
 			String line;
 			while ((line = reader.readLine()) != null) {
