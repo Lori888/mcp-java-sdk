@@ -10,6 +10,7 @@ import java.net.URI;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Miscellaneous utility methods.
@@ -18,6 +19,17 @@ import java.util.Objects;
  */
 
 public final class Utils {
+
+	/*
+	 * (copy from org.apache.coyote.Request.requestIdGenerator in tomcat-embed-core-11.0.2.jar)
+	 * At 100,000 requests a second there are enough IDs here for ~3,000,000 years before it overflows (and then we have
+	 * another 3,000,000 years before it gets back to zero).
+	 *
+	 * Local testing shows that 5, 10, 50, 500 or 1000 threads can obtain 60,000,000+ IDs a second from a single
+	 * AtomicLong. That is about about 17ns per request. It does not appear that the introduction of this counter will
+	 * cause a bottleneck for request processing.
+	 */
+	private static final AtomicLong requestIdGenerator = new AtomicLong(0);
 
 	/**
 	 * Check whether the given {@code String} contains actual <em>text</em>.
@@ -141,5 +153,9 @@ public final class Utils {
 	 */
 	public static <T> T requireNonNullElse(T obj, T defaultObj) {
 		return (obj != null) ? obj : Objects.requireNonNull(defaultObj, "defaultObj");
+	}
+
+	public static String getAndIncrement() {
+		return Long.toString(requestIdGenerator.getAndIncrement());
 	}
 }

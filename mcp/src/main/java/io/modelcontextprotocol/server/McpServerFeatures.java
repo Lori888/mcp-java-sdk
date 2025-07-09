@@ -8,6 +8,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.util.Assert;
 import io.modelcontextprotocol.util.Utils;
 import lombok.Value;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -55,6 +56,32 @@ public class McpServerFeatures {
 		/** The server instructions text */
 		String instructions;
 
+		List<McpServerFeatures.AsyncStreamingToolSpecification> streamTools;
+
+		/**
+		 * Create an instance and validate the arguments (backward compatible
+		 * constructor).
+		 * @param serverInfo The server implementation details
+		 * @param serverCapabilities The server capabilities
+		 * @param tools The list of tool specifications
+		 * @param resources The map of resource specifications
+		 * @param resourceTemplates The list of resource templates
+		 * @param prompts The map of prompt specifications
+		 * @param rootsChangeConsumers The list of consumers that will be notified when
+		 * the roots list changes
+		 * @param instructions The server instructions text
+		 */
+		public Async(McpSchema.Implementation serverInfo, McpSchema.ServerCapabilities serverCapabilities,
+					 List<McpServerFeatures.AsyncToolSpecification> tools, Map<String, AsyncResourceSpecification> resources,
+					 List<McpSchema.ResourceTemplate> resourceTemplates,
+					 Map<String, McpServerFeatures.AsyncPromptSpecification> prompts,
+					 Map<McpSchema.CompleteReference, McpServerFeatures.AsyncCompletionSpecification> completions,
+					 List<BiFunction<McpAsyncServerExchange, List<McpSchema.Root>, Mono<Void>>> rootsChangeConsumers,
+					 String instructions) {
+			this(serverInfo, serverCapabilities, tools, resources, resourceTemplates, prompts, completions,
+					rootsChangeConsumers, instructions, Collections.emptyList());
+		}
+
 		/**
 		 * Create an instance and validate the arguments.
 		 * @param serverInfo The server implementation details
@@ -66,6 +93,7 @@ public class McpServerFeatures {
 		 * @param rootsChangeConsumers The list of consumers that will be notified when
 		 * the roots list changes
 		 * @param instructions The server instructions text
+		 * @param streamTools The list of streaming tool specifications
 		 */
 		Async(McpSchema.Implementation serverInfo, McpSchema.ServerCapabilities serverCapabilities,
 				List<McpServerFeatures.AsyncToolSpecification> tools, Map<String, AsyncResourceSpecification> resources,
@@ -73,7 +101,7 @@ public class McpServerFeatures {
 				Map<String, McpServerFeatures.AsyncPromptSpecification> prompts,
 				Map<McpSchema.CompleteReference, McpServerFeatures.AsyncCompletionSpecification> completions,
 				List<BiFunction<McpAsyncServerExchange, List<McpSchema.Root>, Mono<Void>>> rootsChangeConsumers,
-				String instructions) {
+				String instructions, List<McpServerFeatures.AsyncStreamingToolSpecification> streamTools) {
 
 			Assert.notNull(serverInfo, "Server info must not be null");
 
@@ -97,6 +125,7 @@ public class McpServerFeatures {
 			this.completions = (completions != null) ? completions : Collections.emptyMap();
 			this.rootsChangeConsumers = (rootsChangeConsumers != null) ? rootsChangeConsumers : Collections.emptyList();
 			this.instructions = instructions;
+			this.streamTools = (streamTools != null) ? streamTools : Collections.emptyList();
 		}
 
 		/**
@@ -272,6 +301,45 @@ public class McpServerFeatures {
 						.fromCallable(() -> tool.getCall().apply(new McpSyncServerExchange(exchange), map))
 						.subscribeOn(Schedulers.boundedElastic()));
 		}
+	}
+
+	/**
+	 * Specification of a streaming tool with its asynchronous handler function that can
+	 * return either a single result (Mono) or a stream of results (Flux). This enables
+	 * tools to provide real-time streaming responses for long-running operations or
+	 * progressive results.
+	 *
+	 * <p>
+	 * Example streaming tool specification: <pre>{@code
+	 * new McpServerFeatures.AsyncStreamingToolSpecification(
+	 *     new Tool(
+	 *         "file_processor",
+	 *         "Processes files with streaming progress updates",
+	 *         new JsonSchemaObject()
+	 *             .required("file_path")
+	 *             .property("file_path", JsonSchemaType.STRING)
+	 *     ),
+	 *     (exchange, args) -> {
+	 *         String filePath = (String) args.get("file_path");
+	 *         return Flux.interval(Duration.ofSeconds(1))
+	 *             .take(10)
+	 *             .map(i -> new CallToolResult("Processing step " + i + " for " + filePath));
+	 *     }
+	 * )
+	 * }</pre>
+     */
+	@Value
+	public static class AsyncStreamingToolSpecification {
+		/**
+		 * The tool definition including name, description, and parameter schema
+		 */
+		McpSchema.Tool tool;
+
+		/**
+		 * The function that implements the tool's streaming logic, receiving
+		 * arguments and returning a Flux of results that will be streamed to the client via SSE.
+		 */
+		BiFunction<McpAsyncServerExchange, Map<String, Object>, Flux<McpSchema.CallToolResult>> call;
 	}
 
 	/**

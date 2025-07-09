@@ -1,19 +1,17 @@
 /*
- * copy from https://github.com/modelcontextprotocol/java-sdk/pull/290/files and refactor use jdk8.
+ * 2025-07-02 copy from
+ * https://github.com/ZachGerman/mcp-java-sdk  StreamableHttpServerTransportProvider branch
+ * mcp/src/test/java/io/modelcontextprotocol/server/transport/StreamableHttpServerTransportProviderTest.java
+ *
  * Copyright 2024-2024 the original author or authors.
  */
 
 package io.modelcontextprotocol.server.transport;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
-import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
 import io.modelcontextprotocol.spec.McpServerSession;
-import io.modelcontextprotocol.spec.McpServerTransport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -25,14 +23,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -42,292 +36,89 @@ class StreamableHttpServerTransportProviderTests {
 
     private StreamableHttpServerTransportProvider transportProvider;
 
-    private McpServerSession.Factory sessionFactory;
+    private ObjectMapper objectMapper;
+
+    private McpServerSession.StreamableHttpSessionFactory sessionFactory;
 
     private McpServerSession mockSession;
 
-    private McpServerTransport capturedTransport;
-
     @BeforeEach
     void setUp() {
-        ObjectMapper objectMapper = new ObjectMapper();
-
+        objectMapper = new ObjectMapper();
         mockSession = mock(McpServerSession.class);
-        sessionFactory = mock(McpServerSession.Factory.class);
+        sessionFactory = mock(McpServerSession.StreamableHttpSessionFactory.class);
 
-        when(sessionFactory.create(any(McpServerTransport.class))).thenAnswer(invocation -> {
-            capturedTransport = invocation.getArgument(0);
-            return mockSession;
-        });
-        when(mockSession.closeGracefully()).thenReturn(Mono.empty());
-        when(mockSession.sendNotification(any(), any())).thenReturn(Mono.empty());
-        when(mockSession.handle(any(JSONRPCMessage.class))).thenReturn(Mono.empty());
+        when(sessionFactory.create(anyString())).thenReturn(mockSession);
         when(mockSession.getId()).thenReturn("test-session-id");
+        when(mockSession.closeGracefully()).thenReturn(Mono.empty());
+        when(mockSession.sendNotification(anyString(), any())).thenReturn(Mono.empty());
 
         transportProvider = new StreamableHttpServerTransportProvider(objectMapper, "/mcp", null);
-        transportProvider.setSessionFactory(sessionFactory);
+        transportProvider.setStreamableHttpSessionFactory(sessionFactory);
+    }
+
+    @Test
+    void shouldCreateSessionOnFirstRequest() {
+        // Test session creation directly through the getOrCreateSession method
+        String sessionId = "test-session-1";
+
+        McpServerSession session = transportProvider.getOrCreateSession(sessionId, true);
+
+        assertThat(session).isNotNull();
+        verify(sessionFactory).create(sessionId);
+    }
+
+    @Test
+    void shouldHandleSSERequest() throws IOException, ServletException {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        AsyncContext asyncContext = mock(AsyncContext.class);
+        StringWriter stringWriter = new StringWriter();
+        PrintWriter printWriter = new PrintWriter(stringWriter);
+
+        String sessionId = "test-session-2";
+        when(request.getRequestURI()).thenReturn("/mcp");
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getHeader("Accept")).thenReturn("text/event-stream");
+        when(request.getHeader("Mcp-Session-Id")).thenReturn(sessionId);
+        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
+        when(request.startAsync()).thenReturn(asyncContext);
+        when(response.getWriter()).thenReturn(printWriter);
+        when(response.getHeader("Mcp-Session-Id")).thenReturn(sessionId);
+
+        // First create a session
+        transportProvider.getOrCreateSession(sessionId, true);
+
+        transportProvider.doGet(request, response);
+
+        verify(response).setContentType("text/event-stream");
+        verify(response).setCharacterEncoding("UTF-8");
+        verify(response).setHeader("Cache-Control", "no-cache");
+        verify(response).setHeader("Connection", "keep-alive");
     }
 
     @Test
     void shouldNotifyClients() {
-        String sessionId = UUID.randomUUID().toString();
-        Map<String, McpServerSession> sessions = new ConcurrentHashMap<>();
-        sessions.put(sessionId, mockSession);
+        String sessionId = "test-session-3";
+        transportProvider.getOrCreateSession(sessionId, true);
 
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
+        String method = "test/notification";
+        String params = "test message";
 
-        String method = "testNotification";
-        Map<String, Object> params = Collections.singletonMap("key", "value");
         StepVerifier.create(transportProvider.notifyClients(method, params)).verifyComplete();
 
-        verify(mockSession).sendNotification(eq(method), eq(params));
+        // Verify that the session was created
+        assertThat(transportProvider.getOrCreateSession(sessionId, false)).isNotNull();
     }
 
     @Test
     void shouldCloseGracefully() {
-        String sessionId = UUID.randomUUID().toString();
-        Map<String, McpServerSession> sessions = new ConcurrentHashMap<>();
-        sessions.put(sessionId, mockSession);
-
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
+        String sessionId = "test-session-4";
+        transportProvider.getOrCreateSession(sessionId, true);
 
         StepVerifier.create(transportProvider.closeGracefully()).verifyComplete();
 
         verify(mockSession).closeGracefully();
-    }
-
-    @Test
-    void shouldHandlePostRequestForInitialize() throws IOException {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        StringWriter stringWriter = new StringWriter();
-        PrintWriter writer = new PrintWriter(stringWriter);
-
-        when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader("Accept")).thenReturn("application/json, text/event-stream");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(null);
-        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        String initializeRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test-client\",\"version\":\"1.0.0\"}},\"id\":1}";
-        when(request.getReader()).thenReturn(new java.io.BufferedReader(new java.io.StringReader(initializeRequest)));
-        when(response.getWriter()).thenReturn(writer);
-        AsyncContext asyncContext = mock(AsyncContext.class);
-        when(request.startAsync()).thenReturn(asyncContext);
-
-        transportProvider.doPost(request, response);
-
-        verify(sessionFactory).create(any(McpServerTransport.class));
-        ArgumentCaptor<JSONRPCMessage> messageCaptor = ArgumentCaptor.forClass(JSONRPCMessage.class);
-        verify(mockSession).handle(messageCaptor.capture());
-        JSONRPCMessage capturedMessage = messageCaptor.getValue();
-        assertThat(capturedMessage).isInstanceOf(JSONRPCRequest.class);
-        JSONRPCRequest capturedRequest = (JSONRPCRequest) capturedMessage;
-        assertThat(capturedRequest.getMethod()).isEqualTo(McpSchema.METHOD_INITIALIZE);
-        verify(response, atLeastOnce()).setHeader(eq(StreamableHttpServerTransportProvider.SESSION_ID_HEADER),
-                anyString());
-    }
-
-    @Test
-    void shouldHandlePostRequestWithExistingSession() throws IOException {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        StringWriter stringWriter = new StringWriter();
-        String sessionId = UUID.randomUUID().toString();
-        PrintWriter writer = new PrintWriter(stringWriter);
-        Map<String, McpServerSession> sessions = new HashMap<>();
-        sessions.put(sessionId, mockSession);
-
-        when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader("Accept")).thenReturn("application/json, text/event-stream");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(sessionId);
-        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        String toolCallRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"test-tool\",\"arguments\":{}},\"id\":2}";
-        when(request.getReader()).thenReturn(new java.io.BufferedReader(new java.io.StringReader(toolCallRequest)));
-        when(response.getWriter()).thenReturn(writer);
-
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
-
-        transportProvider.doPost(request, response);
-
-        ArgumentCaptor<JSONRPCMessage> messageCaptor = ArgumentCaptor.forClass(JSONRPCMessage.class);
-        verify(mockSession).handle(messageCaptor.capture());
-        JSONRPCMessage capturedMessage = messageCaptor.getValue();
-        assertThat(capturedMessage).isInstanceOf(JSONRPCRequest.class);
-        JSONRPCRequest capturedRequest = (JSONRPCRequest) capturedMessage;
-        assertThat(capturedRequest.getMethod()).isEqualTo(McpSchema.METHOD_TOOLS_CALL);
-        verify(response).setHeader(eq(StreamableHttpServerTransportProvider.SESSION_ID_HEADER), eq(sessionId));
-    }
-
-    @Test
-    void shouldHandleGetRequest() throws IOException {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        StringWriter stringWriter = new StringWriter();
-        String sessionId = UUID.randomUUID().toString();
-        AsyncContext asyncContext = mock(AsyncContext.class);
-        PrintWriter writer = new PrintWriter(stringWriter);
-        Map<String, McpServerSession> sessions = new HashMap<>();
-        sessions.put(sessionId, mockSession);
-
-        when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader("Accept")).thenReturn("text/event-stream");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(sessionId);
-        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        when(request.startAsync()).thenReturn(asyncContext);
-        when(response.getWriter()).thenReturn(writer);
-
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
-
-        transportProvider.doGet(request, response);
-
-        verify(response).setContentType(StreamableHttpServerTransportProvider.TEXT_EVENT_STREAM);
-        verify(response).setCharacterEncoding(StreamableHttpServerTransportProvider.UTF_8);
-        verify(response).setHeader("Cache-Control", "no-cache");
-        verify(response).setHeader("Connection", "keep-alive");
-        verify(response).setHeader(eq(StreamableHttpServerTransportProvider.SESSION_ID_HEADER), eq(sessionId));
-        verify(request).startAsync();
-        verify(asyncContext).setTimeout(0);
-    }
-
-    @Test
-    void shouldHandleDeleteRequest() throws IOException, ServletException {
-        // Mock HTTP request and response
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        StringWriter stringWriter = new StringWriter();
-        PrintWriter writer = new PrintWriter(stringWriter);
-        String sessionId = UUID.randomUUID().toString();
-        Map<String, McpServerSession> sessions = new HashMap<>();
-        sessions.put(sessionId, mockSession);
-
-        when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(sessionId);
-        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        when(response.getWriter()).thenReturn(writer);
-
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
-
-        transportProvider.doDelete(request, response);
-
-        verify(mockSession).close();
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        assertThat(sessions).isEmpty();
-    }
-
-    @Test
-    void shouldSendMessageThroughTransport() {
-        String sessionId = UUID.randomUUID().toString();
-        Map<String, McpServerSession> sessions = new HashMap<>();
-        sessions.put(sessionId, mockSession);
-
-        // Use reflection to set the sessions map in the transport provider
-        try {
-            java.lang.reflect.Field sessionsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            sessionsField.set(transportProvider, sessions);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sessions field", e);
-        }
-
-        // Create a message to send through a mocked SSE stream
-        Map<String, String> map1 = new HashMap<>();
-        map1.put("name", "test-server");
-        map1.put("version", "1.0.0");
-        Map<String, Object> map2 = new HashMap<>();
-        map2.put("protocolVersion", McpSchema.LATEST_PROTOCOL_VERSION);
-        map2.put("serverInfo", map1);
-        JSONRPCMessage message = new McpSchema.JSONRPCResponse("2.0", 1, map2, null);
-
-        AtomicReference<String> capturedEventData = new AtomicReference<>();
-
-        StreamableHttpServerTransportProvider.StreamableHttpSseStream mockSseStream = mock(
-                StreamableHttpServerTransportProvider.StreamableHttpSseStream.class);
-        doAnswer(invocation -> {
-            String eventType = invocation.getArgument(0);
-            String data = invocation.getArgument(1);
-            assertThat(eventType).isEqualTo(StreamableHttpServerTransportProvider.MESSAGE_EVENT_TYPE);
-            capturedEventData.set(data);
-            return null;
-        }).when(mockSseStream).sendEvent(anyString(), anyString());
-
-        Map<String, StreamableHttpServerTransportProvider.StreamableHttpSseStream> sseStreams = new HashMap<>();
-        sseStreams.put(sessionId, mockSseStream);
-        try {
-            java.lang.reflect.Field sseStreamsField = StreamableHttpServerTransportProvider.class
-                    .getDeclaredField("sseStreams");
-            sseStreamsField.setAccessible(true);
-            sseStreamsField.set(transportProvider, sseStreams);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to set sseStreams field", e);
-        }
-
-        // Using reflection to access the private constructor
-        McpServerTransport transport;
-        try {
-            Class<?> transportClass = Class.forName(
-                    "io.modelcontextprotocol.server.transport.StreamableHttpServerTransportProvider$StreamableHttpServerTransport");
-            java.lang.reflect.Constructor<?> constructor = transportClass
-                    .getDeclaredConstructor(StreamableHttpServerTransportProvider.class, String.class);
-            constructor.setAccessible(true);
-            transport = (McpServerTransport) constructor.newInstance(transportProvider, sessionId);
-        }
-        catch (Exception e) {
-            throw new RuntimeException("Failed to create transport", e);
-        }
-
-        StepVerifier.create(transport.sendMessage(message)).verifyComplete();
-        verify(mockSseStream, times(1)).sendEvent(eq(StreamableHttpServerTransportProvider.MESSAGE_EVENT_TYPE),
-                anyString());
-
-        String eventData = capturedEventData.get();
-        assertThat(eventData).isNotNull();
     }
 
     @Test
@@ -346,46 +137,202 @@ class StreamableHttpServerTransportProviderTests {
     }
 
     @Test
-    void shouldHandleMissingSessionId() throws IOException {
+    void shouldRejectNonJSONContentType() throws IOException, ServletException {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
         StringWriter stringWriter = new StringWriter();
-        PrintWriter writer = new PrintWriter(stringWriter);
+        PrintWriter printWriter = new PrintWriter(stringWriter);
 
         when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader("Accept")).thenReturn("text/event-stream");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(null);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getHeader("Content-Type")).thenReturn("text/plain");
         when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        when(response.getWriter()).thenReturn(writer);
+        when(response.getWriter()).thenReturn(printWriter);
 
-        // Execute GET request without Session ID (required)
-        transportProvider.doGet(request, response);
+        transportProvider.doPost(request, response);
 
+        // The implementation uses sendErrorResponse which sets status to 400, not
+        // sendError with 415
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        verify(response).setContentType(StreamableHttpServerTransportProvider.APPLICATION_JSON);
-        assertThat(stringWriter.toString()).contains("Session ID missing");
+        verify(response).setContentType("application/json");
     }
 
     @Test
-    void shouldHandleSessionNotFound() throws IOException {
+    void shouldRejectInvalidAcceptHeader() throws IOException, ServletException {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
         StringWriter stringWriter = new StringWriter();
-        PrintWriter writer = new PrintWriter(stringWriter);
-        String sessionId = UUID.randomUUID().toString();
+        PrintWriter printWriter = new PrintWriter(stringWriter);
 
         when(request.getRequestURI()).thenReturn("/mcp");
-        when(request.getHeader("Accept")).thenReturn("text/event-stream");
-        when(request.getHeader(StreamableHttpServerTransportProvider.SESSION_ID_HEADER)).thenReturn(sessionId);
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getHeader("Accept")).thenReturn("text/html");
         when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
-        when(response.getWriter()).thenReturn(writer);
+        when(response.getWriter()).thenReturn(printWriter);
 
-        // Execute GET request with non-existent session ID
         transportProvider.doGet(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
-        verify(response).setContentType(StreamableHttpServerTransportProvider.APPLICATION_JSON);
-        assertThat(stringWriter.toString()).contains("Session not found");
+        // The implementation uses sendErrorResponse which sets status to 400, not
+        // sendError with 406
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        verify(response).setContentType("application/json");
+    }
+
+    @Test
+    void shouldRequireSessionIdForSSE() throws IOException, ServletException {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        StringWriter stringWriter = new StringWriter();
+        PrintWriter printWriter = new PrintWriter(stringWriter);
+
+        when(request.getRequestURI()).thenReturn("/mcp");
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getHeader("Accept")).thenReturn("text/event-stream");
+        when(request.getHeader("Mcp-Session-Id")).thenReturn(null);
+        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
+        when(response.getWriter()).thenReturn(printWriter);
+
+        transportProvider.doGet(request, response);
+
+        // The implementation uses sendErrorResponse which sets status to 400
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        verify(response).setContentType("application/json");
+    }
+
+    @Test
+    void shouldHandleSessionCleanup() throws IOException, ServletException {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+
+        String sessionId = "test-session-5";
+        when(request.getRequestURI()).thenReturn("/mcp");
+        when(request.getMethod()).thenReturn("DELETE");
+        when(request.getHeader("Mcp-Session-Id")).thenReturn(sessionId);
+        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
+
+        // Create a session first
+        transportProvider.getOrCreateSession(sessionId, true);
+
+        transportProvider.doDelete(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(mockSession).closeGracefully();
+    }
+
+    @Test
+    void shouldHandleDeleteNonExistentSession() throws IOException, ServletException {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        StringWriter stringWriter = new StringWriter();
+        PrintWriter printWriter = new PrintWriter(stringWriter);
+
+        when(request.getRequestURI()).thenReturn("/mcp");
+        when(request.getMethod()).thenReturn("DELETE");
+        when(request.getHeader("Mcp-Session-Id")).thenReturn("non-existent-session");
+        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
+        when(response.getWriter()).thenReturn(printWriter);
+
+        transportProvider.doDelete(request, response);
+
+        // The implementation uses sendErrorResponse which sets status to 400, not
+        // sendError with 404
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        verify(response).setContentType("application/json");
+    }
+
+    @Test
+    void shouldHandleMultipleSessions() {
+        String sessionId1 = "session-1";
+        String sessionId2 = "session-2";
+
+        // Create separate mock sessions for each ID
+        McpServerSession mockSession1 = mock(McpServerSession.class);
+        McpServerSession mockSession2 = mock(McpServerSession.class);
+        when(mockSession1.getId()).thenReturn(sessionId1);
+        when(mockSession2.getId()).thenReturn(sessionId2);
+        when(mockSession1.closeGracefully()).thenReturn(Mono.empty());
+        when(mockSession2.closeGracefully()).thenReturn(Mono.empty());
+        when(mockSession1.sendNotification(anyString(), any())).thenReturn(Mono.empty());
+        when(mockSession2.sendNotification(anyString(), any())).thenReturn(Mono.empty());
+
+        // Configure factory to return different sessions for different IDs
+        when(sessionFactory.create(sessionId1)).thenReturn(mockSession1);
+        when(sessionFactory.create(sessionId2)).thenReturn(mockSession2);
+
+        McpServerSession session1 = transportProvider.getOrCreateSession(sessionId1, true);
+        McpServerSession session2 = transportProvider.getOrCreateSession(sessionId2, true);
+
+        assertThat(session1).isNotNull();
+        assertThat(session2).isNotNull();
+        assertThat(session1).isNotSameAs(session2);
+
+        // Verify both sessions are created with different IDs
+        verify(sessionFactory, times(2)).create(anyString());
+    }
+
+    @Test
+    void shouldReuseExistingSession() {
+        String sessionId = "test-session-6";
+
+        McpServerSession session1 = transportProvider.getOrCreateSession(sessionId, true);
+        McpServerSession session2 = transportProvider.getOrCreateSession(sessionId, false);
+
+        assertThat(session1).isSameAs(session2);
+        verify(sessionFactory, times(1)).create(sessionId);
+    }
+
+    @Test
+    void shouldHandleAsyncTimeout() throws IOException, ServletException {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        AsyncContext asyncContext = mock(AsyncContext.class);
+        StringWriter stringWriter = new StringWriter();
+        PrintWriter printWriter = new PrintWriter(stringWriter);
+
+        when(request.getRequestURI()).thenReturn("/mcp");
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getHeader("Accept")).thenReturn("text/event-stream");
+        when(request.getHeader("Mcp-Session-Id")).thenReturn("test-session");
+        when(request.getHeaderNames()).thenReturn(Collections.enumeration(Collections.emptyList()));
+        when(request.startAsync()).thenReturn(asyncContext);
+        when(response.getWriter()).thenReturn(printWriter);
+        when(response.getHeader("Mcp-Session-Id")).thenReturn("test-session");
+
+        transportProvider.getOrCreateSession("test-session", true);
+        transportProvider.doGet(request, response);
+
+        verify(asyncContext).setTimeout(0L); // Updated to match actual implementation
+    }
+
+    @Test
+    void shouldBuildWithCustomConfiguration() {
+        ObjectMapper customMapper = new ObjectMapper();
+        String customEndpoint = "/custom-mcp";
+
+        StreamableHttpServerTransportProvider provider = StreamableHttpServerTransportProvider.builder()
+                .withObjectMapper(customMapper)
+                .withMcpEndpoint(customEndpoint)
+                .withSessionIdProvider(() -> "custom-session-id")
+                .build();
+
+        assertThat(provider).isNotNull();
+    }
+
+    @Test
+    void shouldHandleBuilderValidation() {
+        try {
+            StreamableHttpServerTransportProvider.builder().withObjectMapper(null).build();
+        }
+        catch (IllegalArgumentException e) {
+            assertThat(e.getMessage()).contains("ObjectMapper must not be null");
+        }
+
+        try {
+            StreamableHttpServerTransportProvider.builder().withMcpEndpoint("").build();
+        }
+        catch (IllegalArgumentException e) {
+            assertThat(e.getMessage()).contains("MCP endpoint must not be empty");
+        }
     }
 
 }

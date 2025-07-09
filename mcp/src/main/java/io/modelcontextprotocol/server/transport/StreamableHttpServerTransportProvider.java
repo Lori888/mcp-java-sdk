@@ -1,5 +1,9 @@
 /*
- * copy from https://github.com/modelcontextprotocol/java-sdk/pull/290/files and refactor use jdk8.
+ * 2025-07-02 copy from
+ * https://github.com/ZachGerman/mcp-java-sdk  StreamableHttpServerTransportProvider branch
+ * mcp/src/main/java/io/modelcontextprotocol/server/transport/StreamableHttpServerTransportProvider.java
+ * and refactor use jdk8.
+ *
  * Copyright 2024-2024 the original author or authors.
  */
 
@@ -9,55 +13,50 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.*;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
+import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
+import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse;
 import io.modelcontextprotocol.util.Assert;
 import io.modelcontextprotocol.util.Utils;
-import lombok.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.util.context.Context;
 
 import javax.servlet.AsyncContext;
+import javax.servlet.ReadListener;
 import javax.servlet.ServletException;
+import javax.servlet.ServletInputStream;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
- * Implementation of the MCP Streamable HTTP transport provider for servers. This
- * implementation follows the Streamable HTTP transport specification from protocol
- * version 2025-03-26.
+ * MCP Streamable HTTP transport provider that uses a single session class to manage all
+ * streams and transports.
  *
  * <p>
- * The transport handles a single HTTP endpoint that supports POST, GET, & DELETE methods:
+ * Key improvements over the original implementation:
  * <ul>
- * <li>POST - For receiving client messages and optionally establishing SSE streams for
- * responses</li>
- * <li>GET - For establishing SSE streams for server-to-client communication</li>
- * <li>DELETE - For terminating sessions</li>
+ * <li>Manages server-client sessions, including transport registration.
+ * <li>Handles HTTP requests and HTTP/SSE responses and streams.
+ * <li>Provides callbacks for session lifecycle and errors.
+ * <li>Supports graceful shutdown.
+ * <li>Enforces allowed 'Origin' header values if configured.
+ * <li>Provides a default session ID provider if none is configured.
  * </ul>
  *
- * <p>
- * Features:
- * <ul>
- * <li>Session management with secure session IDs</li>
- * <li>Support for resumable SSE streams</li>
- * <li>Support for multiple concurrent client connections</li>
- * <li>Graceful shutdown support</li>
- * </ul>
- *
+ * @author Zachary German
  */
 @WebServlet(asyncSupported = true)
 public class StreamableHttpServerTransportProvider extends HttpServlet implements McpServerTransportProvider {
@@ -80,6 +79,12 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
 
     public static final String ORIGIN_HEADER = "Origin";
 
+    public static final String ALLOW_ORIGIN_HEADER = "Access-Control-Allow-Origin";
+
+    public static final String ALLOW_ORIGIN_DEFAULT_VALUE = "*";
+
+    public static final String PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version";
+
     public static final String CACHE_CONTROL_HEADER = "Cache-Control";
 
     public static final String CONNECTION_HEADER = "Connection";
@@ -88,7 +93,15 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
 
     public static final String CONNECTION_KEEP_ALIVE = "keep-alive";
 
-    public static final String FAILED_TO_SEND_ERROR_RESPONSE = "Failed to send error response: {}";
+    public static final String MCP_SESSION_ID = "MCP-Session-ID";
+
+    public static final String DEFAULT_MCP_ENDPOINT = "/mcp";
+
+    /** com.fasterxml.jackson.databind.ObjectMapper */
+    private static final ObjectMapper DEFAULT_OBJECT_MAPPER = new ObjectMapper();
+
+    /** UUID.randomUUID().toString() */
+    private static final Supplier<String> DEFAULT_SESSION_ID_PROVIDER = () -> UUID.randomUUID().toString();
 
     /** JSON object mapper for serialization/deserialization */
     private final ObjectMapper objectMapper;
@@ -99,41 +112,69 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
     /** Supplier for generating unique session IDs */
     private final Supplier<String> sessionIdProvider;
 
-    /** UUID.randomUUID().toString() */
-    private static final Supplier<String> DEFAULT_SESSION_ID_PROVIDER = () -> UUID.randomUUID().toString();
-
-    /** Map of active client sessions, keyed by session ID */
-    private final Map<String, McpServerSession> sessions = new ConcurrentHashMap<>();
-
-    /** Map of active SSE streams, keyed by session ID */
-    private final Map<String, StreamableHttpSseStream> sseStreams = new ConcurrentHashMap<>();
+    /** Sessions map, keyed by Session ID */
+    private static final Map<String, McpServerSession> sessions = new ConcurrentHashMap<>();
 
     /** Flag indicating if the transport is in the process of shutting down */
     private final AtomicBoolean isClosing = new AtomicBoolean(false);
 
-    /** Session factory for creating new sessions */
-    private McpServerSession.Factory sessionFactory;
+    /** Optional allowed 'Origin' header value list. Not enforced if empty. */
+    private final List<String> allowedOrigins = new ArrayList<>();
+
+    /** Callback interface for session lifecycle and errors */
+    private SessionHandler sessionHandler;
+
+    /** Factory for McpServerSession takes session IDs */
+    private McpServerSession.StreamableHttpSessionFactory streamableHttpSessionFactory;
 
     /**
-     * Creates a new StreamableHttpServerTransportProvider instance.
-     * @param objectMapper The JSON object mapper to use for message
-     * serialization/deserialization
-     * @param mcpEndpoint The endpoint path for handling MCP requests
-     * @param sessionIdProvider optional Supplier for providing unique session IDs
+     * <ul>
+     * <li>Manages server-client sessions, including transport registration.
+     * <li>Handles HTTP requests and HTTP/SSE responses and streams.
+     * </ul>
+     * @param objectMapper ObjectMapper - Default:
+     * com.fasterxml.jackson.databind.ObjectMapper
+     * @param mcpEndpoint String - Default: '/mcp'
+     * @param sessionIdProvider Supplier(String) - Default: UUID.randomUUID().toString()
      */
     public StreamableHttpServerTransportProvider(ObjectMapper objectMapper, String mcpEndpoint,
                                                  Supplier<String> sessionIdProvider) {
-        Assert.notNull(objectMapper, "ObjectMapper must not be null");
-        Assert.hasText(mcpEndpoint, "MCP endpoint must not be empty");
-
-        this.objectMapper = objectMapper;
-        this.mcpEndpoint = mcpEndpoint;
+        this.objectMapper = Utils.requireNonNullElse(objectMapper, DEFAULT_OBJECT_MAPPER);
+        this.mcpEndpoint = Utils.requireNonNullElse(mcpEndpoint, DEFAULT_MCP_ENDPOINT);
         this.sessionIdProvider = Utils.requireNonNullElse(sessionIdProvider, DEFAULT_SESSION_ID_PROVIDER);
+    }
+
+    /**
+     * <ul>
+     * <li>Manages server-client sessions, including transport registration.
+     * <li>Handles HTTP requests and HTTP/SSE responses and streams.
+     * </ul>
+     */
+    public StreamableHttpServerTransportProvider() {
+        /*
+         * objectMapper ObjectMapper - Default:com.fasterxml.jackson.databind.ObjectMapper
+         * mcpEndpoint String - Default: '/mcp'
+         * sessionIdProvider Supplier(String) - Default: UUID.randomUUID().toString()
+         */
+        this(null, null, null);
     }
 
     @Override
     public void setSessionFactory(McpServerSession.Factory sessionFactory) {
-        this.sessionFactory = sessionFactory;
+        // Required but not used for this implementation
+    }
+
+    public void setStreamableHttpSessionFactory(McpServerSession.StreamableHttpSessionFactory sessionFactory) {
+        this.streamableHttpSessionFactory = sessionFactory;
+    }
+
+    public void setSessionHandler(SessionHandler sessionHandler) {
+        this.sessionHandler = sessionHandler;
+    }
+
+    public void setAllowedOrigins(List<String> allowedOrigins) {
+        this.allowedOrigins.clear();
+        this.allowedOrigins.addAll(allowedOrigins);
     }
 
     @Override
@@ -146,78 +187,65 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
         logger.debug("Attempting to broadcast message to {} active sessions", sessions.size());
 
         return Flux.fromIterable(sessions.values())
-                .flatMap(session -> session.sendNotification(method, params)
-                        .doOnError(
-                                e -> logger.error("Failed to send message to session {}: {}", session.getId(), e.getMessage()))
-                        .onErrorComplete())
+                .flatMap(session -> session.sendNotification(method, params).doOnError(e -> {
+                    logger.error("Failed to send message to session {}: {}", session.getId(), e.getMessage());
+                    if (sessionHandler != null) {
+                        sessionHandler.onSendNotificationError(session.getId(), e);
+                    }
+                }).onErrorComplete())
                 .then();
     }
 
     @Override
     public Mono<Void> closeGracefully() {
-        isClosing.set(true);
-        logger.debug("Initiating graceful shutdown with {} active sessions", sessions.size());
-
-        return Flux.fromIterable(sessions.values()).flatMap(McpServerSession::closeGracefully).then();
+        return Mono.defer(() -> {
+            isClosing.set(true);
+            logger.debug("Initiating graceful shutdown with {} active sessions", sessions.size());
+            return Flux.fromIterable(sessions.values())
+                    .flatMap(session -> session.closeGracefully()
+                            .doOnError(e -> logger.error("Error closing session {}: {}", session.getId(), e.getMessage()))
+                            .onErrorComplete())
+                    .then();
+        });
     }
 
-    /**
-     * Handles HTTP GET requests to establish SSE connections.
-     * @param request The HTTP servlet request
-     * @param response The HTTP servlet response
-     * @throws IOException If an I/O error occurs
-     */
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
-            throws IOException {
+            throws ServletException, IOException {
 
         String requestURI = request.getRequestURI();
-        logger.debug("GET request received for URI: {}", requestURI);
+        logger.info("GET request received for URI: '{}' with headers: {}", requestURI, extractHeaders(request));
 
-        // Log all headers for debugging
-        Enumeration<String> headerNames = request.getHeaderNames();
-        while (headerNames.hasMoreElements()) {
-            String headerName = headerNames.nextElement();
-            logger.debug("Header: {} = {}", headerName, request.getHeader(headerName));
-        }
-
-        if (!requestURI.endsWith(mcpEndpoint)) {
-            logger.debug("URI does not match mcpEndpoint: {}", mcpEndpoint);
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-
-        if (isClosing.get()) {
-            logger.debug("Server is shutting down, rejecting request");
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Server is shutting down");
+        if (!validateOrigin(request, response) || !validateEndpoint(requestURI, response)
+                || !validateNotClosing(response)) {
             return;
         }
 
         String acceptHeader = request.getHeader(ACCEPT_HEADER);
-        logger.debug("Accept header: {}", acceptHeader);
         if (acceptHeader == null || !acceptHeader.contains(TEXT_EVENT_STREAM)) {
             logger.debug("Accept header missing or does not include {}", TEXT_EVENT_STREAM);
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.getWriter().write(createErrorJson("Accept header must include text/event-stream"));
+            sendErrorResponse(response, "Accept header must include text/event-stream");
             return;
         }
 
         String sessionId = request.getHeader(SESSION_ID_HEADER);
         if (sessionId == null) {
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.getWriter().write(createErrorJson("Session ID missing in request header"));
+            sendErrorResponse(response, "Session ID missing in request header");
             return;
         }
 
         McpServerSession session = sessions.get(sessionId);
         if (session == null) {
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-            response.getWriter().write(createErrorJson("Session not found: " + sessionId));
+            handleSessionNotFound(sessionId, request, response);
             return;
         }
+
+        // Delayed until version negotiation is implemented.
+        /*
+         * if (session.getState().equals(session.STATE_INITIALIZED) &&
+         * request.getHeader(PROTOCOL_VERSION_HEADER) == null) {
+         * sendErrorResponse(response, "Protocol version missing in request header"); }
+         */
 
         // Set up SSE connection
         response.setContentType(TEXT_EVENT_STREAM);
@@ -226,179 +254,451 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
         response.setHeader(CONNECTION_HEADER, CONNECTION_KEEP_ALIVE);
         response.setHeader(SESSION_ID_HEADER, sessionId);
 
-        // Start async processing
         AsyncContext asyncContext = request.startAsync();
-        asyncContext.setTimeout(0); // No timeout
+        asyncContext.setTimeout(0);
 
-        // Check for Last-Event-ID header for resumable streams
         String lastEventId = request.getHeader(LAST_EVENT_ID_HEADER);
 
-        // Create or get SSE stream for this session
-        StreamableHttpSseStream sseStream = getOrCreateSseStream(sessionId);
-        if (lastEventId != null) {
-            sseStream.replayEventsAfter(lastEventId);
+        if (lastEventId == null) { // Just opening a listening stream
+            SseTransport sseTransport = new SseTransport(objectMapper, response, asyncContext, lastEventId,
+                    session.LISTENING_TRANSPORT, sessionId);
+            session.registerTransport(session.LISTENING_TRANSPORT, sseTransport);
+            logger.debug("Registered SSE transport {} for session {}", session.LISTENING_TRANSPORT, sessionId);
         }
-
-        PrintWriter writer = response.getWriter();
-
-        // Subscribe to the SSE stream and write events to the response
-        sseStream.getEventFlux().doOnNext(event -> {
-            try {
-                if (event.getId() != null) {
-                    writer.write("id: " + event.getId() + "\n");
-                }
-                if (event.getEvent() != null) {
-                    writer.write("event: " + event.getEvent() + "\n");
-                }
-                writer.write("data: " + event.getData() + "\n\n");
-                writer.flush();
-
-                if (writer.checkError()) {
-                    throw new IOException("Client disconnected");
-                }
-            }
-            catch (IOException e) {
-                logger.debug("Error writing to SSE stream: {}", e.getMessage());
-                asyncContext.complete();
-            }
-        }).doOnComplete(() -> {
-            try {
-                writer.close();
-            }
-            finally {
-                asyncContext.complete();
-            }
-        }).doOnError(e -> {
-            logger.error("Error in SSE stream: {}", e.getMessage());
-            asyncContext.complete();
-        }).subscribe();
+        else { // Asking for a stream to replay events from a previous request
+            String transportId = Utils.getAndIncrement();
+            SseTransport sseTransport = new SseTransport(objectMapper, response, asyncContext, lastEventId,
+                    transportId, sessionId);
+            session.registerTransport(transportId, sseTransport);
+            logger.debug("Registered SSE transport {} for session {}", session.LISTENING_TRANSPORT, sessionId);
+        }
     }
 
-    /**
-     * Handles HTTP POST requests for client messages.
-     * @param request The HTTP servlet request
-     * @param response The HTTP servlet response
-     * @throws IOException If an I/O error occurs
-     */
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
-            throws IOException {
+            throws ServletException, IOException {
 
         String requestURI = request.getRequestURI();
-        logger.debug("POST request received for URI: {}", requestURI);
+        logger.info("POST request received for URI: '{}' with headers: {}", requestURI, extractHeaders(request));
 
-        // Log all headers for debugging
-        Enumeration<String> headerNames = request.getHeaderNames();
-        while (headerNames.hasMoreElements()) {
-            String headerName = headerNames.nextElement();
-            logger.debug("Header: {} = {}", headerName, request.getHeader(headerName));
+        if (!validateOrigin(request, response) || !validateEndpoint(requestURI, response)
+                || !validateNotClosing(response)) {
+            return;
         }
 
+        String acceptHeader = request.getHeader(ACCEPT_HEADER);
+        if (acceptHeader == null
+                || (!acceptHeader.contains(APPLICATION_JSON) || !acceptHeader.contains(TEXT_EVENT_STREAM))) {
+            logger.debug("Accept header validation failed. Header: {}", acceptHeader);
+            sendErrorResponse(response, "Accept header must include both application/json and text/event-stream");
+            return;
+        }
+
+        AsyncContext asyncContext = request.startAsync();
+        asyncContext.setTimeout(0);
+
+        StringBuilder body = new StringBuilder();
+        ServletInputStream inputStream = request.getInputStream();
+
+        inputStream.setReadListener(new ReadListener() {
+            @Override
+            public void onDataAvailable() throws IOException {
+                int len;
+                byte[] buffer = new byte[1024];
+                while (inputStream.isReady() && (len = inputStream.read(buffer)) != -1) {
+                    body.append(new String(buffer, 0, len, StandardCharsets.UTF_8));
+                }
+            }
+
+            @Override
+            public void onAllDataRead() throws IOException {
+                try {
+                    logger.debug("Parsing JSON-RPC message: {}", body);
+                    JSONRPCMessage message = McpSchema.deserializeJsonRpcMessage(objectMapper, body.toString());
+
+                    boolean isInitializeRequest = false;
+                    String sessionId = request.getHeader(SESSION_ID_HEADER);
+
+                    if (message instanceof McpSchema.JSONRPCRequest) {
+                        McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) message;
+                        if (McpSchema.METHOD_INITIALIZE.equals(req.getMethod())) {
+                            isInitializeRequest = true;
+                            logger.debug("Detected initialize request");
+                            if (sessionId == null) {
+                                sessionId = sessionIdProvider.get();
+                                logger.debug("Created new session ID for initialize request: {}", sessionId);
+                            }
+                        }
+                    }
+
+                    if (!isInitializeRequest && sessionId == null) {
+                        sendErrorResponse(response, "Session ID missing in request header");
+                        asyncContext.complete();
+                        return;
+                    }
+
+                    McpServerSession session = getOrCreateSession(sessionId, isInitializeRequest);
+                    if (session == null) {
+                        logger.error("Failed to create session for sessionId: {}", sessionId);
+                        handleSessionNotFound(sessionId, request, response);
+                        asyncContext.complete();
+                        return;
+                    }
+
+                    // Delayed until version negotiation is implemented.
+                    /*
+                     * if (session.getState().equals(session.STATE_INITIALIZED) &&
+                     * request.getHeader(PROTOCOL_VERSION_HEADER) == null) {
+                     * sendErrorResponse(response,
+                     * "Protocol version missing in request header"); }
+                     */
+
+                    logger.debug("Using session: {}", sessionId);
+
+                    response.setHeader(SESSION_ID_HEADER, sessionId);
+
+                    // Determine response type and create appropriate transport if needed
+                    ResponseType responseType = detectResponseType(message, session);
+                    final String transportId;
+                    final Object id;
+                    if (message instanceof JSONRPCRequest) {
+                        JSONRPCRequest req = (JSONRPCRequest) message;
+                        id = req.getId();
+                    }
+                    else if (message instanceof JSONRPCResponse) {
+                        JSONRPCResponse resp = (JSONRPCResponse) message;
+                        id = resp.getId();
+                    }
+                    else {
+                        id = null;
+                    }
+                    if (id instanceof String) {
+                        transportId = (String) id;
+                    }
+                    else if (id instanceof Integer) {
+                        transportId = id.toString();
+                    }
+                    else {
+                        transportId = null;
+                    }
+
+                    if (responseType == ResponseType.STREAM) {
+                        logger.debug("Handling STREAM response type");
+                        response.setContentType(TEXT_EVENT_STREAM);
+                        response.setCharacterEncoding(UTF_8);
+                        response.setHeader(CACHE_CONTROL_HEADER, CACHE_CONTROL_NO_CACHE);
+                        response.setHeader(CONNECTION_HEADER, CONNECTION_KEEP_ALIVE);
+
+                        SseTransport sseTransport = new SseTransport(objectMapper, response, asyncContext, null,
+                                transportId, sessionId);
+                        session.registerTransport(transportId, sseTransport);
+                    }
+                    else {
+                        logger.debug("Handling IMMEDIATE response type");
+                        // Only set content type for requests, not notifications
+                        if (message instanceof McpSchema.JSONRPCRequest) {
+                            logger.debug("Setting content type to APPLICATION_JSON for request response");
+                            response.setContentType(APPLICATION_JSON);
+                        }
+                        else {
+                            logger.debug("Not setting content type for notification (empty response expected)");
+                        }
+
+                        if (transportId != null) { // Not needed for notifications (null
+                            // transportId)
+                            HttpTransport httpTransport = new HttpTransport(objectMapper, response, asyncContext);
+                            session.registerTransport(transportId, httpTransport);
+                        }
+                    }
+
+                    // Handle the message
+                    logger.debug("About to handle message: {} with transport: {}", message.getClass().getSimpleName(),
+                            transportId);
+
+                    // For notifications, we need to handle the HTTP response manually
+                    // since no JSON response is sent
+                    if (message instanceof McpSchema.JSONRPCNotification) {
+                        session.handle(message).doOnSuccess(v -> {
+                            logger.debug("Message handling completed successfully for transport: {}", transportId);
+                            logger.debug("[NOTIFICATION] Sending empty HTTP response for notification");
+                            try {
+                                if (!response.isCommitted()) {
+                                    response.setStatus(HttpServletResponse.SC_OK);
+                                    response.setCharacterEncoding("UTF-8");
+                                }
+                                asyncContext.complete();
+                            }
+                            catch (Exception e) {
+                                logger.error("Failed to send notification response: {}", e.getMessage());
+                                asyncContext.complete();
+                            }
+                        }).doOnError(e -> {
+                            logger.error("Error in message handling: {}", e.getMessage(), e);
+                            asyncContext.complete();
+                        }).doFinally(signalType -> {
+                            logger.debug("Unregistering transport: {} with signal: {}", transportId, signalType);
+                            session.unregisterTransport(transportId);
+                        }).contextWrite(Context.of(MCP_SESSION_ID, sessionId)).subscribe();
+                    }
+                    else {
+                        // For requests, let the transport handle the response
+                        session.handle(message)
+                                .doOnSuccess(v -> logger.info("Message handling completed successfully for transport: {}",
+                                        transportId))
+                                .doOnError(e -> logger.error("Error in message handling: {}", e.getMessage(), e))
+                                .doFinally(signalType -> {
+                                    logger.debug("Unregistering transport: {} with signal: {}", transportId, signalType);
+                                    session.unregisterTransport(transportId);
+                                })
+                                .contextWrite(Context.of(MCP_SESSION_ID, sessionId))
+                                .subscribe(null, error -> {
+                                    logger.error("Error in message handling chain: {}", error.getMessage(), error);
+                                    asyncContext.complete();
+                                });
+                    }
+
+                }
+                catch (Exception e) {
+                    logger.error("Error processing message: ", e);
+                    sendErrorResponse(response, "Invalid JSON-RPC message: " + e.getMessage());
+                    asyncContext.complete();
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                logger.error("Error reading request body: ", t);
+                try {
+                    sendErrorResponse(response, "Error reading request: " + t.getMessage());
+                }
+                catch (IOException e) {
+                    logger.error("Failed to write error response", e);
+                }
+                asyncContext.complete();
+            }
+        });
+    }
+
+    @Override
+    protected void doDelete(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+
+        String requestURI = request.getRequestURI();
         if (!requestURI.endsWith(mcpEndpoint)) {
-            logger.debug("URI does not match mcpEndpoint: {}", mcpEndpoint);
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
             return;
         }
 
+        String sessionId = request.getHeader(SESSION_ID_HEADER);
+        if (sessionId == null) {
+            sendErrorResponse(response, "Session ID missing in request header");
+            return;
+        }
+
+        McpServerSession session = sessions.remove(sessionId);
+        if (session == null) {
+            handleSessionNotFound(sessionId, request, response);
+            return;
+        }
+
+        session.closeGracefully().contextWrite(Context.of(MCP_SESSION_ID, sessionId)).subscribe();
+        logger.debug("Session closed: {}", sessionId);
+        if (sessionHandler != null) {
+            sessionHandler.onSessionClose(sessionId);
+        }
+
+        response.setStatus(HttpServletResponse.SC_OK);
+    }
+
+    private boolean validateOrigin(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (!allowedOrigins.isEmpty()) {
+            String origin = request.getHeader(ORIGIN_HEADER);
+            if (!allowedOrigins.contains(origin)) {
+                logger.debug("Origin header does not match allowed origins: '{}'", origin);
+                response.sendError(HttpServletResponse.SC_FORBIDDEN);
+                return false;
+            }
+            else {
+                response.setHeader(ALLOW_ORIGIN_HEADER, origin);
+            }
+        }
+        else {
+            response.setHeader(ALLOW_ORIGIN_HEADER, ALLOW_ORIGIN_DEFAULT_VALUE);
+        }
+        return true;
+    }
+
+    private boolean validateEndpoint(String requestURI, HttpServletResponse response) throws IOException {
+        if (!requestURI.endsWith(mcpEndpoint)) {
+            logger.debug("URI does not match MCP endpoint: '{}'", mcpEndpoint);
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean validateNotClosing(HttpServletResponse response) throws IOException {
         if (isClosing.get()) {
             logger.debug("Server is shutting down, rejecting request");
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Server is shutting down");
-            return;
+            return false;
         }
+        return true;
+    }
 
-        // According to spec, client MUST include an Accept header listing both
-        // application/json and text/event-stream
-        String acceptHeader = request.getHeader(ACCEPT_HEADER);
-        logger.debug("Accept header: {}", acceptHeader);
-        if (acceptHeader == null
-                || (!acceptHeader.contains(APPLICATION_JSON) && !acceptHeader.contains(TEXT_EVENT_STREAM))) {
-            logger.debug("Accept header validation failed. Header: {}", acceptHeader);
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.getWriter()
-                    .write(createErrorJson("Accept header must include both application/json and text/event-stream"));
-            return;
+    protected McpServerSession getOrCreateSession(String sessionId, boolean createIfMissing) {
+        McpServerSession session = sessions.get(sessionId);
+        logger.debug("Looking for session: {}, found: {}", sessionId, session != null);
+        if (session == null && createIfMissing) {
+            logger.debug("Creating new session: {}", sessionId);
+            session = streamableHttpSessionFactory.create(sessionId);
+            sessions.put(sessionId, session);
+            logger.debug("Created new session: {}", sessionId);
+            if (sessionHandler != null) {
+                sessionHandler.onSessionCreate(sessionId, null);
+            }
         }
+        return session;
+    }
 
-        // Client accepts SSE since we've validated the Accept header contains
-        // text/event-stream
-        boolean acceptsEventStream = true;
+    private ResponseType detectResponseType(McpSchema.JSONRPCMessage message, McpServerSession session) {
+        if (message instanceof McpSchema.JSONRPCRequest) {
+            McpSchema.JSONRPCRequest request = (McpSchema.JSONRPCRequest) message;
+            if (McpSchema.METHOD_INITIALIZE.equals(request.getMethod())) {
+                return ResponseType.IMMEDIATE;
+            }
 
-        // Get session ID from header
-        String sessionId = request.getHeader(SESSION_ID_HEADER);
-        boolean isInitializeRequest = false;
+            // Check if handler returns Flux (streaming) or Mono (immediate)
+            McpServerSession.RequestHandler<?> handler = session.getRequestHandler(request.getMethod());
+            if (handler != null && handler instanceof McpServerSession.StreamingRequestHandler) {
+                return ResponseType.STREAM;
+            }
+            return ResponseType.IMMEDIATE;
+        }
+        else {
+            return ResponseType.IMMEDIATE;
+        }
+    }
 
+    private void handleSessionNotFound(String sessionId, HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        sendErrorResponse(response, "Session not found: " + sessionId);
+        if (sessionHandler != null) {
+            sessionHandler.onSessionNotFound(sessionId, request, response);
+        }
+    }
+
+    private void sendErrorResponse(HttpServletResponse response, String message) throws IOException {
+        response.setContentType(APPLICATION_JSON);
+        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        response.getWriter().write(createErrorJson(message));
+    }
+
+    private String createErrorJson(String message) {
         try {
-            // Read request body
-            StringBuilder body = new StringBuilder();
-            try (BufferedReader reader = request.getReader()) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    body.append(line);
-                }
-            }
+            return objectMapper.writeValueAsString(new McpError(message));
+        }
+        catch (IOException e) {
+            logger.error("Failed to serialize error message", e);
+            return "{\"error\":\"" + message + "\"}";
+        }
+    }
 
-            // Parse the JSON-RPC message
-            JSONRPCMessage message = McpSchema.deserializeJsonRpcMessage(objectMapper, body.toString());
+    @Override
+    public void destroy() {
+        closeGracefully().block();
+        super.destroy();
+    }
 
-            // Check if this is an initialize request
-            if (message instanceof McpSchema.JSONRPCRequest) {
-                McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) message;
-                if (McpSchema.METHOD_INITIALIZE.equals(req.getMethod())) {
-                    isInitializeRequest = true;
-                    // For initialize requests, create a new session if one doesn't exist
-                    if (sessionId == null) {
-                        sessionId = sessionIdProvider.get();
-                        logger.debug("Created new session ID for initialize request: {}", sessionId);
-                    }
-                }
-            }
+    private Map<String, String> extractHeaders(HttpServletRequest request) {
+        Map<String, String> headers = new HashMap<>();
+        Enumeration<String> headerNames = request.getHeaderNames();
+        while (headerNames.hasMoreElements()) {
+            String name = headerNames.nextElement();
+            headers.put(name, request.getHeader(name));
+        }
+        return headers;
+    }
 
-            // Validate session ID for non-initialize requests
-            if (!isInitializeRequest && sessionId == null) {
-                response.setContentType(APPLICATION_JSON);
-                response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                response.getWriter().write(createErrorJson("Session ID missing in request header"));
-                return;
-            }
+    public static Builder builder() {
+        return new Builder();
+    }
 
-            // Get or create session
-            McpServerSession session = getOrCreateSession(sessionId, isInitializeRequest);
-            if (session == null && !isInitializeRequest) {
-                response.setContentType(APPLICATION_JSON);
-                response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                response.getWriter().write(createErrorJson("Session not found: " + sessionId));
-                return;
-            }
+    public static class Builder {
 
-            // Handle the message
-            session.handle(message).block(); // Block for servlet compatibility
+        private ObjectMapper objectMapper = DEFAULT_OBJECT_MAPPER;
 
-            // Set session ID header in response
-            response.setHeader(SESSION_ID_HEADER, sessionId);
+        private String mcpEndpoint = DEFAULT_MCP_ENDPOINT;
 
-            // For requests that expect responses, we need to set up an SSE stream
-            if (message instanceof McpSchema.JSONRPCRequest && acceptsEventStream) {
-                // Set up SSE connection
-                response.setContentType(TEXT_EVENT_STREAM);
-                response.setCharacterEncoding(UTF_8);
-                response.setHeader(CACHE_CONTROL_HEADER, CACHE_CONTROL_NO_CACHE);
-                response.setHeader(CONNECTION_HEADER, CONNECTION_KEEP_ALIVE);
+        private Supplier<String> sessionIdProvider = DEFAULT_SESSION_ID_PROVIDER;
 
-                // Start async processing
-                AsyncContext asyncContext = request.startAsync();
-                asyncContext.setTimeout(0); // No timeout
+        public Builder withObjectMapper(ObjectMapper objectMapper) {
+            Assert.notNull(objectMapper, "ObjectMapper must not be null");
+            this.objectMapper = objectMapper;
+            return this;
+        }
 
-                StreamableHttpSseStream sseStream = getOrCreateSseStream(sessionId);
+        public Builder withMcpEndpoint(String mcpEndpoint) {
+            Assert.hasText(mcpEndpoint, "MCP endpoint must not be empty");
+            this.mcpEndpoint = mcpEndpoint;
+            return this;
+        }
+
+        public Builder withSessionIdProvider(Supplier<String> sessionIdProvider) {
+            Assert.notNull(sessionIdProvider, "SessionIdProvider must not be null");
+            this.sessionIdProvider = sessionIdProvider;
+            return this;
+        }
+
+        public StreamableHttpServerTransportProvider build() {
+            return new StreamableHttpServerTransportProvider(objectMapper, mcpEndpoint, sessionIdProvider);
+        }
+
+    }
+
+    private enum ResponseType {
+
+        IMMEDIATE, STREAM
+
+    }
+
+    /**
+     * SSE transport implementation.
+     */
+    private static class SseTransport implements McpServerTransport {
+
+        private static final Logger logger = LoggerFactory.getLogger(SseTransport.class);
+
+        private final ObjectMapper objectMapper;
+
+        private final HttpServletResponse response;
+
+        private final AsyncContext asyncContext;
+
+        private final Sinks.Many<SseEvent> eventSink = Sinks.many().unicast().onBackpressureBuffer();
+
+        private final Map<String, SseEvent> eventHistory = new ConcurrentHashMap<>();
+
+        private final String id;
+
+        private final String sessionId;
+
+        public SseTransport(ObjectMapper objectMapper, HttpServletResponse response, AsyncContext asyncContext,
+                            String lastEventId, String transportId, String sessionId) {
+            this.objectMapper = objectMapper;
+            this.response = response;
+            this.asyncContext = asyncContext;
+            this.id = transportId;
+            this.sessionId = sessionId;
+
+            setupSseStream(lastEventId);
+        }
+
+        private void setupSseStream(String lastEventId) {
+            try {
                 PrintWriter writer = response.getWriter();
 
-                // For initialize requests, include the session ID in the response
-                if (isInitializeRequest) {
-                    response.setHeader(SESSION_ID_HEADER, sessionId);
-                }
-
-                // Subscribe to the SSE stream and write events to the response
-                sseStream.getEventFlux().doOnNext(event -> {
+                eventSink.asFlux().doOnNext(event -> {
                     try {
                         if (event.getId() != null) {
                             writer.write("id: " + event.getId() + "\n");
@@ -427,232 +727,35 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
                 }).doOnError(e -> {
                     logger.error("Error in SSE stream: {}", e.getMessage());
                     asyncContext.complete();
-                }).subscribe();
-            }
-            else if (message instanceof McpSchema.JSONRPCRequest) {
-                // Client doesn't accept SSE, we'll return a regular JSON response
-                response.setContentType(APPLICATION_JSON);
-                response.setStatus(HttpServletResponse.SC_OK);
-                // The actual response would be sent later through another channel
-            }
-            else {
-                // For notifications and responses, return 202 Accepted
-                response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            }
-        } catch (Exception e) {
-            logger.error("Error processing message: {}", e.getMessage());
-            try {
-                McpError mcpError = new McpError(e.getMessage());
-                response.setContentType(APPLICATION_JSON);
-                response.setCharacterEncoding(UTF_8);
-                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-                String jsonError = objectMapper.writeValueAsString(mcpError);
-                PrintWriter writer = response.getWriter();
-                writer.write(jsonError);
-                writer.flush();
-            }
-            catch (IOException ex) {
-                logger.error(FAILED_TO_SEND_ERROR_RESPONSE, ex.getMessage());
-                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error processing message");
-            }
-        }
-    }
+                }).contextWrite(Context.of(MCP_SESSION_ID, response.getHeader(SESSION_ID_HEADER))).subscribe();
 
-    /**
-     * Handles HTTP DELETE requests to terminate sessions.
-     * @param request The HTTP servlet request
-     * @param response The HTTP servlet response
-     * @throws ServletException If a servlet-specific error occurs
-     * @throws IOException If an I/O error occurs
-     */
-    @Override
-    protected void doDelete(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-
-        String requestURI = request.getRequestURI();
-        if (!requestURI.endsWith(mcpEndpoint)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-
-        String sessionId = request.getHeader(SESSION_ID_HEADER);
-        if (sessionId == null) {
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.getWriter().write(createErrorJson("Session ID missing in request header"));
-            return;
-        }
-
-        McpServerSession session = sessions.remove(sessionId);
-        if (session == null) {
-            response.setContentType(APPLICATION_JSON);
-            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-            response.getWriter().write(createErrorJson("Session not found: " + sessionId));
-            return;
-        }
-
-        // Close the session and any associated SSE stream
-        StreamableHttpSseStream sseStream = sseStreams.remove(sessionId);
-        if (sseStream != null) {
-            sseStream.complete();
-        }
-
-        session.close();
-        logger.debug("Session terminated: {}", sessionId);
-
-        response.setStatus(HttpServletResponse.SC_OK);
-    }
-
-    /**
-     * Gets or creates a session for the given session ID.
-     * @param sessionId The session ID
-     * @param createIfMissing Whether to create a new session if one doesn't exist
-     * @return The session, or null if it doesn't exist and createIfMissing is false
-     */
-    private McpServerSession getOrCreateSession(String sessionId, boolean createIfMissing) {
-        McpServerSession session = sessions.get(sessionId);
-        if (session == null && createIfMissing) {
-            StreamableHttpServerTransport transport = new StreamableHttpServerTransport(sessionId);
-            session = sessionFactory.create(transport);
-            sessions.put(sessionId, session);
-            logger.debug("Created new session: {}", sessionId);
-        }
-        return session;
-    }
-
-    /**
-     * Gets or creates an SSE stream for the given session ID.
-     * @param sessionId The session ID
-     * @return The SSE stream
-     */
-    private StreamableHttpSseStream getOrCreateSseStream(String sessionId) {
-        return sseStreams.computeIfAbsent(sessionId, id -> {
-            StreamableHttpSseStream stream = new StreamableHttpSseStream();
-            logger.debug("Created new SSE stream for session: {}", id);
-            return stream;
-        });
-    }
-
-    /**
-     * Creates a JSON error response.
-     * @param message The error message
-     * @return The JSON error string
-     */
-    private String createErrorJson(String message) {
-        try {
-            return objectMapper.writeValueAsString(new McpError(message));
-        }
-        catch (IOException e) {
-            logger.error("Failed to serialize error message", e);
-            return "{\"error\":\"" + message + "\"}";
-        }
-    }
-
-    /**
-     * Implementation of McpServerTransport for Streamable HTTP sessions.
-     */
-    private class StreamableHttpServerTransport implements McpServerTransport {
-
-        private final String sessionId;
-
-        /**
-         * Creates a new session transport with the specified ID.
-         * @param sessionId The unique identifier for this session
-         */
-        StreamableHttpServerTransport(String sessionId) {
-            this.sessionId = sessionId;
-            logger.debug("Session transport {} initialized", sessionId);
-        }
-
-        @Override
-        public Mono<Void> sendMessage(JSONRPCMessage message) {
-            StreamableHttpSseStream sseStream = sseStreams.get(sessionId);
-            if (sseStream == null) {
-                logger.debug("No SSE stream available for session {}, message will be queued for next connection",
-                        sessionId);
-                // Create a stream that will hold messages until a client connects
-                sseStream = getOrCreateSseStream(sessionId);
-            }
-
-            try {
-                String jsonText = objectMapper.writeValueAsString(message);
-                sseStream.sendEvent(MESSAGE_EVENT_TYPE, jsonText);
-                logger.debug("Message sent to session {}", sessionId);
-
-                // For responses to requests, we need to complete the stream to avoid
-                // hanging
-                if (message instanceof McpSchema.JSONRPCResponse) {
-                    logger.debug("Completing SSE stream after sending response for session {}", sessionId);
-                    sseStream.complete();
+                // Replay events if requested
+                if (lastEventId != null) {
+                    replayEventsAfter(lastEventId);
                 }
 
-                return Mono.empty();
             }
-            catch (Exception e) {
-                logger.error("Failed to send message to session {}: {}", sessionId, e.getMessage());
-                return Mono.error(e);
+            catch (IOException e) {
+                logger.error("Failed to setup SSE stream: {}", e.getMessage());
+                asyncContext.complete();
             }
         }
 
-        @Override
-        public <T> T unmarshalFrom(Object data, TypeReference<T> typeRef) {
-            return objectMapper.convertValue(data, typeRef);
-        }
-
-        @Override
-        public Mono<Void> closeGracefully() {
-            return Mono.fromRunnable(() -> {
-                logger.debug("Closing session transport: {}", sessionId);
-                sessions.remove(sessionId);
-                StreamableHttpSseStream sseStream = sseStreams.remove(sessionId);
-                if (sseStream != null) {
-                    sseStream.complete();
-                }
-            });
-        }
-
-    }
-
-    /**
-     * Represents an SSE stream for a client connection.
-     */
-    public class StreamableHttpSseStream {
-
-        private final Sinks.Many<SseEvent> eventSink = Sinks.many().multicast().onBackpressureBuffer();
-
-        private final Map<String, SseEvent> eventHistory = new ConcurrentHashMap<>();
-
-        private long eventCounter = 0;
-
-        /**
-         * Sends an event on this SSE stream.
-         * @param eventType The event type
-         * @param data The event data
-         */
-        public void sendEvent(String eventType, String data) {
-            String eventId = String.valueOf(++eventCounter);
-            SseEvent event = new SseEvent(eventId, eventType, data);
-            eventHistory.put(eventId, event);
-            eventSink.tryEmitNext(event);
-        }
-
-        /**
-         * Gets the Flux of SSE events for this stream.
-         * @return The Flux of SSE events
-         */
-        public Flux<SseEvent> getEventFlux() {
-            return eventSink.asFlux();
-        }
-
-        /**
-         * Replays events that occurred after the specified event ID.
-         * @param lastEventId The last event ID received by the client
-         */
-        public void replayEventsAfter(String lastEventId) {
+        private void replayEventsAfter(String lastEventId) {
             try {
-                long lastId = Long.parseLong(lastEventId);
-                for (long i = lastId + 1; i <= eventCounter; i++) {
-                    SseEvent event = eventHistory.get(String.valueOf(i));
+                McpServerSession session = sessions.get(sessionId);
+                String transportIdOfLastEventId = session.getTransportIdForEvent(lastEventId);
+                Map<String, SseEvent> transportEventHistory = session
+                        .getTransportEventHistory(transportIdOfLastEventId);
+                List<String> eventIds = transportEventHistory.keySet()
+                        .stream()
+                        .map(Long::parseLong)
+                        .filter(key -> key > Long.parseLong(lastEventId))
+                        .sorted()
+                        .map(String::valueOf)
+                        .collect(Collectors.toList());
+                for (String eventId : eventIds) {
+                    SseEvent event = transportEventHistory.get(eventId);
                     if (event != null) {
                         eventSink.tryEmitNext(event);
                     }
@@ -663,116 +766,149 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
             }
         }
 
+        @Override
+        public Mono<Void> sendMessage(JSONRPCMessage message) {
+            try {
+                String jsonText = objectMapper.writeValueAsString(message);
+                String eventId = sessions.get(sessionId).incrementAndGetEventId(id);
+                SseEvent event = new SseEvent(eventId, MESSAGE_EVENT_TYPE, jsonText);
+
+                eventHistory.put(eventId, event);
+                logger.debug("Sending SSE event {}: {}", eventId, jsonText);
+                eventSink.tryEmitNext(event);
+
+                if (message instanceof McpSchema.JSONRPCResponse) {
+                    logger.debug("Completing SSE stream after sending response");
+                    eventSink.tryEmitComplete();
+                    sessions.get(sessionId).setTransportEventHistory(id, eventHistory);
+                }
+
+                return Mono.empty();
+            }
+            catch (Exception e) {
+                logger.error("Failed to send message: {}", e.getMessage());
+                return Mono.error(e);
+            }
+        }
+
         /**
-         * Completes this SSE stream.
+         * Sends a stream of messages for Flux responses.
          */
-        public void complete() {
-            eventSink.tryEmitComplete();
+        public Mono<Void> sendMessageStream(Flux<JSONRPCMessage> messageStream) {
+            return messageStream.doOnNext(message -> {
+                try {
+                    String jsonText = objectMapper.writeValueAsString(message);
+                    String eventId = sessions.get(sessionId).incrementAndGetEventId(id);
+                    SseEvent event = new SseEvent(eventId, MESSAGE_EVENT_TYPE, jsonText);
+
+                    eventHistory.put(eventId, event);
+                    logger.debug("Sending SSE stream event {}: {}", eventId, jsonText);
+                    eventSink.tryEmitNext(event);
+                }
+                catch (Exception e) {
+                    logger.error("Failed to send stream message: {}", e.getMessage());
+                    eventSink.tryEmitError(e);
+                }
+            }).doOnComplete(() -> {
+                logger.debug("Completing SSE stream after sending all stream messages");
+                eventSink.tryEmitComplete();
+                sessions.get(sessionId).setTransportEventHistory(id, eventHistory);
+            }).then();
+        }
+
+        @Override
+        public <T> T unmarshalFrom(Object data, TypeReference<T> typeRef) {
+            return objectMapper.convertValue(data, typeRef);
+        }
+
+        @Override
+        public Mono<Void> closeGracefully() {
+            return Mono.fromRunnable(() -> {
+                eventSink.tryEmitComplete();
+                sessions.get(sessionId).setTransportEventHistory(id, eventHistory);
+                logger.debug("SSE transport closed gracefully");
+            });
         }
 
     }
 
     /**
-     * Represents an SSE event.
+     * HTTP transport implementation for immediate responses.
      */
-    @Value
-    public static class SseEvent {
-        String id;
-        String event;
-        String data;
-    }
+    private static class HttpTransport implements McpServerTransport {
 
-    /**
-     * Cleans up resources when the servlet is being destroyed.
-     */
-    @Override
-    public void destroy() {
-        closeGracefully().block();
-        super.destroy();
-    }
+        private static final Logger logger = LoggerFactory.getLogger(HttpTransport.class);
 
-    /**
-     * Helper method to extract headers from an HTTP request.
-     * @param request The HTTP servlet request
-     * @return A map of header names to values
-     */
-    private Map<String, String> extractHeaders(HttpServletRequest request) {
-        Map<String, String> headers = new HashMap<>();
-        Enumeration<String> headerNames = request.getHeaderNames();
-        while (headerNames.hasMoreElements()) {
-            String name = headerNames.nextElement();
-            headers.put(name, request.getHeader(name));
-        }
-        return headers;
-    }
+        private final ObjectMapper objectMapper;
 
-    /**
-     * Creates a new Builder instance for configuring and creating instances of
-     * StreamableHttpServerTransportProvider.
-     * @return A new Builder instance
-     */
-    public static Builder builder() {
-        return new Builder();
-    }
+        private final HttpServletResponse response;
 
-    /**
-     * Builder for creating instances of StreamableHttpServerTransportProvider.
-     */
-    public static class Builder {
+        private final AsyncContext asyncContext;
 
-        private ObjectMapper objectMapper = new ObjectMapper();
-
-        private String mcpEndpoint;
-
-        private Supplier<String> sessionIdProvider = () -> UUID.randomUUID().toString();
-
-        /**
-         * Sets the JSON object mapper to use for message serialization/deserialization.
-         * @param objectMapper The object mapper to use
-         * @return This builder instance for method chaining
-         */
-        public Builder withObjectMapper(ObjectMapper objectMapper) {
-            Assert.notNull(objectMapper, "ObjectMapper must not be null");
+        public HttpTransport(ObjectMapper objectMapper, HttpServletResponse response, AsyncContext asyncContext) {
             this.objectMapper = objectMapper;
-            return this;
+            this.response = response;
+            this.asyncContext = asyncContext;
         }
 
-        /**
-         * Sets the MCP endpoint path.
-         * @param mcpEndpoint The MCP endpoint path
-         * @return This builder instance for method chaining
-         */
-        public Builder withMcpEndpoint(String mcpEndpoint) {
-            Assert.hasText(mcpEndpoint, "MCP endpoint must not be empty");
-            this.mcpEndpoint = mcpEndpoint;
-            return this;
+        @Override
+        public Mono<Void> sendMessage(JSONRPCMessage message) {
+            return Mono.fromRunnable(() -> {
+                try {
+                    if (response.isCommitted()) {
+                        logger.warn("Response already committed, cannot send message");
+                        return;
+                    }
+
+                    response.setCharacterEncoding("UTF-8");
+                    response.setStatus(HttpServletResponse.SC_OK);
+
+                    // For notifications, don't write any content (empty response)
+                    if (message instanceof McpSchema.JSONRPCNotification) {
+                        logger.debug("Sending empty 200 response for notification");
+                        // Just complete the response with no content
+                    }
+                    else {
+                        // For requests/responses, write JSON content
+                        String jsonText = objectMapper.writeValueAsString(message);
+                        PrintWriter writer = response.getWriter();
+                        writer.write(jsonText);
+                        writer.flush();
+                        logger.debug("Successfully sent immediate response: {}", jsonText);
+                    }
+                }
+                catch (Exception e) {
+                    logger.error("Failed to send message: {}", e.getMessage(), e);
+                    try {
+                        if (!response.isCommitted()) {
+                            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                        }
+                    }
+                    catch (Exception ignored) {
+                    }
+                }
+                finally {
+                    asyncContext.complete();
+                }
+            });
         }
 
-        /**
-         * Sets the session ID provider.
-         * @param sessionIdProvider The supplier for generating session IDs
-         * @return This builder instance for method chaining
-         */
-        public Builder withSessionIdProvider(Supplier<String> sessionIdProvider) {
-            Assert.notNull(sessionIdProvider, "SessionIdProvider must not be null");
-            this.sessionIdProvider = sessionIdProvider;
-            return this;
+        @Override
+        public <T> T unmarshalFrom(Object data, TypeReference<T> typeRef) {
+            return objectMapper.convertValue(data, typeRef);
         }
 
-        /**
-         * Builds a new instance of StreamableHttpServerTransportProvider with the
-         * configured settings.
-         * @return A new StreamableHttpServerTransportProvider instance
-         * @throws IllegalStateException if objectMapper or mcpEndpoint is not set
-         */
-        public StreamableHttpServerTransportProvider build() {
-            if (objectMapper == null) {
-                throw new IllegalStateException("ObjectMapper must be set");
-            }
-            if (mcpEndpoint == null) {
-                throw new IllegalStateException("MCP endpoint must be set");
-            }
-            return new StreamableHttpServerTransportProvider(objectMapper, mcpEndpoint, sessionIdProvider);
+        @Override
+        public Mono<Void> closeGracefully() {
+            return Mono.fromRunnable(() -> {
+                try {
+                    asyncContext.complete();
+                }
+                catch (Exception e) {
+                    logger.debug("Error completing async context: {}", e.getMessage());
+                }
+                logger.debug("HTTP transport closed gracefully");
+            });
         }
     }
 }
