@@ -390,7 +390,7 @@ public class HttpServletSseServerTransportProvider extends HttpServlet implement
 				try {
 					String jsonText = objectMapper.writeValueAsString(message);
 					sendEvent(writer, MESSAGE_EVENT_TYPE, jsonText);
-					logger.debug("Message sent to session {}", sessionId);
+					logger.debug("Message sent to session {}: {}", sessionId, jsonText);
 				}
 				catch (Exception e) {
 					logger.error("Failed to send message to session {}: {}", sessionId, e.getMessage());
