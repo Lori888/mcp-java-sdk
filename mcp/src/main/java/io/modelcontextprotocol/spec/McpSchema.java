@@ -14,10 +14,12 @@ import java.io.IOException;
 import java.util.*;
 
 /**
- * jdk8 refactored version based on the official implementation
+ * Based on the <a href="http://www.jsonrpc.org/specification">JSON-RPC 2.0
+ * specification</a> and the <a href=
+ * "https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts">Model
+ * Context Protocol Schema</a>.
  *
- * @author luolp
- * @date 2025/5/23
+ * @author Christian Tzolov
  */
 public final class McpSchema {
 
