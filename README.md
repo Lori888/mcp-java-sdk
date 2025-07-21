@@ -93,8 +93,8 @@ mvn clean install
 
 ## 📑 TODO LIST
 
-- `mcp-spring-webflux`、`mcp-spring-webmvc`子模块重构
-- 加入`HttpClientStreamableHttpTransport`
-- 适配Specification 2025-03-26 和 2025-06-18
-- jdk8重构官方主干分支
+- [ ] `mcp-spring-webflux`、`mcp-spring-webmvc`子模块重构
+- [x] 加入`HttpClientStreamableHttpTransport`  2025-07-21 已完成
+- [ ] 适配Specification 2025-03-26 和 2025-06-18
+- [ ] jdk8重构官方主干分支
 
