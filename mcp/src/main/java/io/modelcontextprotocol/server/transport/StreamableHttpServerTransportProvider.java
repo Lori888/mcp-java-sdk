@@ -825,11 +825,14 @@ public class StreamableHttpServerTransportProvider extends HttpServlet implement
         public Mono<Void> closeGracefully() {
             return Mono.fromRunnable(() -> {
                 eventSink.tryEmitComplete();
-                sessions.get(sessionId).setTransportEventHistory(id, eventHistory);
+                if (sessions.get(sessionId) != null) {
+                    sessions.get(sessionId).setTransportEventHistory(id, eventHistory);
+                } else {
+                    logger.warn("session not found for SSE transport close: {}", sessionId);
+                }
                 logger.debug("SSE transport closed gracefully");
             });
         }
-
     }
 
     /**
