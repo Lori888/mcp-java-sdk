@@ -352,6 +352,7 @@ public final class McpSchema {
          * from MCP servers in their prompts.
          */
         @Value
+        @NoArgsConstructor(force = true)
         @JsonInclude(JsonInclude.Include.NON_ABSENT)
         public static class Sampling {
         }
@@ -411,16 +412,20 @@ public final class McpSchema {
         ToolCapabilities tools;
 
         @Value
+        @NoArgsConstructor(force = true)
         @JsonInclude(JsonInclude.Include.NON_ABSENT)
         public static class CompletionCapabilities {
         }
 
         @Value
+        @NoArgsConstructor(force = true)
         @JsonInclude(JsonInclude.Include.NON_ABSENT)
         public static class LoggingCapabilities {
         }
 
         @Value
+        @NoArgsConstructor(force = true)
+        @AllArgsConstructor
         @JsonInclude(JsonInclude.Include.NON_ABSENT)
         public static class PromptCapabilities {
             @JsonProperty("listChanged")
@@ -535,6 +540,8 @@ public final class McpSchema {
      * objects are used or displayed.
      */
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Annotations {
@@ -612,6 +619,8 @@ public final class McpSchema {
      * @see <a href="https://datatracker.ietf.org/doc/html/rfc6570">RFC 6570</a>
      */
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ResourceTemplate implements Annotated {
@@ -668,6 +677,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ListResourceTemplatesResult {
@@ -689,6 +700,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ReadResourceResult {
@@ -701,6 +714,8 @@ public final class McpSchema {
      * whenever a particular resource changes.
      */
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class SubscribeRequest {
@@ -713,6 +728,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class UnsubscribeRequest {
@@ -890,6 +907,8 @@ public final class McpSchema {
      * from the MCP server.
      */
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PromptMessage {
@@ -955,6 +974,8 @@ public final class McpSchema {
      * The server's response to a prompts/get request from the client.
      */
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class GetPromptResult {
@@ -1299,6 +1320,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ModelHint {
@@ -1501,6 +1524,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PaginatedResult {
@@ -1512,6 +1537,8 @@ public final class McpSchema {
     // Progress and Logging
     // ---------------------------
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ProgressNotification {
         @JsonProperty("progressToken")
@@ -1644,6 +1671,7 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PromptReference implements McpSchema.CompleteReference {
@@ -1675,6 +1703,7 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ResourceReference implements McpSchema.CompleteReference {
@@ -1706,6 +1735,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class CompleteRequest implements Request {
@@ -1716,6 +1747,8 @@ public final class McpSchema {
         CompleteArgument argument;
 
         @Value
+        @NoArgsConstructor(force = true)
+        @AllArgsConstructor
         public static class CompleteArgument {
             @JsonProperty("name")
             String name;
@@ -1726,6 +1759,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class CompleteResult {
@@ -1733,6 +1768,8 @@ public final class McpSchema {
         CompleteCompletion completion;
 
         @Value
+        @NoArgsConstructor(force = true)
+        @AllArgsConstructor
         public static class CompleteCompletion {
             @JsonProperty("values")
             List<String> values;
