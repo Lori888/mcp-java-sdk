@@ -375,7 +375,7 @@ public class McpServerFeatures {
 		 * {@link io.modelcontextprotocol.spec.McpSchema.ReadResourceRequest}. */
 		BiFunction<McpAsyncServerExchange, McpSchema.ReadResourceRequest, Mono<McpSchema.ReadResourceResult>> readHandler;
 
-		static AsyncResourceSpecification fromSync(SyncResourceSpecification resource) {
+		public static AsyncResourceSpecification fromSync(SyncResourceSpecification resource) {
 			// FIXME: This is temporary, proper validation should be implemented
 			if (resource == null) {
 				return null;
@@ -424,7 +424,7 @@ public class McpServerFeatures {
 		 * {@link io.modelcontextprotocol.spec.McpSchema.GetPromptRequest}. */
 		BiFunction<McpAsyncServerExchange, McpSchema.GetPromptRequest, Mono<McpSchema.GetPromptResult>> promptHandler;
 
-		static AsyncPromptSpecification fromSync(SyncPromptSpecification prompt) {
+		public static AsyncPromptSpecification fromSync(SyncPromptSpecification prompt) {
 			// FIXME: This is temporary, proper validation should be implemented
 			if (prompt == null) {
 				return null;
