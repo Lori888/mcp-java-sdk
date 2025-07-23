@@ -679,6 +679,8 @@ public final class McpSchema {
     }
 
     @Value
+    @NoArgsConstructor(force = true)
+    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.NON_ABSENT)
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ReadResourceRequest {
